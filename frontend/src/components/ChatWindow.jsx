@@ -4,62 +4,59 @@ import ReactMarkdown from 'react-markdown'
 
 const WELCOME_MESSAGE = {
   role: 'assistant',
-  content: `Good day, Mr. V. AIRA online. All systems operational.
+  content: `AIRA online. Good day, Mr. V.
 
-I'm always listening — just say **"Hey AIRA"** and I'll respond instantly. Or type below.
-
-What can I do for you today?`,
+Say **"Hey AIRA"** anytime to activate me, or just type below. What do you need?`,
   timestamp: new Date(),
 }
 
 const QUICK_PROMPTS = [
-  "Give me a morning briefing",
-  "What's on my schedule?",
-  "Help me write an email",
-  "What's in the news?",
-  "Debug my code",
-  "Set a reminder",
+  'Give me my briefing',
+  'What\'s in the news?',
+  'Help me write an email',
+  'What should I focus on today?',
+  'Debug my code',
+  'Give me your opinion on something',
 ]
 
-// Strip markdown for clean TTS
+// Wake word variants — catches common mishearings
+const WAKE_WORDS = ['hey aira', 'hey era', 'hey ira', 'hey ara', 'hey aria', 'a aira', 'hey error']
+
 function stripMarkdown(text) {
   return text
-    .replace(/#{1,6}\s+/g, '')
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1')
-    .replace(/`{1,3}[^`]*`{1,3}/g, '')
-    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
-    .replace(/^[-*+]\s+/gm, '')
-    .replace(/^\d+\.\s+/gm, '')
-    .replace(/^>\s+/gm, '')
-    .replace(/\n{2,}/g, '. ')
-    .replace(/\n/g, ' ')
-    .trim()
+    .replace(/#{1,6}\s+/g, '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1')
+    .replace(/`{1,3}[^`]*`{1,3}/g, '').replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/^[-*+]\s+/gm, '').replace(/^\d+\.\s+/gm, '').replace(/^>\s+/gm, '')
+    .replace(/\n{2,}/g, '. ').replace(/\n/g, ' ').trim()
 }
 
-// Pick best female voice — FRIDAY style
 function getBestFemaleVoice() {
-  const voices = window.speechSynthesis.getVoices()
-  const preferred = [
-    'Samantha',                                        // macOS — clear US female
-    'Google UK English Female',
-    'Microsoft Zira - English (United States)',
-    'Microsoft Hazel - English (Great Britain)',
-    'Karen',                                           // macOS Australian
-    'Moira',                                           // macOS Irish
-    'Tessa',                                           // macOS South African
-    'Victoria',
-    'Fiona',
+  const voices = window.speechSynthesis?.getVoices() || []
+
+  // 1. Enhanced / Neural voices first (macOS — sound human)
+  const enhanced = voices.find(v =>
+    v.lang.startsWith('en') &&
+    (v.name.includes('Enhanced') || v.name.includes('Neural') || v.name.includes('Premium')) &&
+    !v.name.toLowerCase().includes('albert') &&
+    !v.name.toLowerCase().includes('fred') &&
+    !v.name.toLowerCase().includes('ralph')
+  )
+  if (enhanced) return enhanced
+
+  // 2. Known good female voices by name
+  const names = [
+    'Samantha', 'Ava', 'Allison', 'Victoria', 'Karen', 'Moira',
+    'Tessa', 'Fiona', 'Google UK English Female',
+    'Microsoft Zira', 'Microsoft Hazel',
   ]
-  for (const name of preferred) {
-    const v = voices.find(v => v.name === name)
+  for (const n of names) {
+    const v = voices.find(v => v.name.includes(n))
     if (v) return v
   }
+
+  // 3. Any English voice
   return voices.find(v => v.lang.startsWith('en')) || voices[0] || null
 }
-
-// Wake word variants to catch mishearing
-const WAKE_WORDS = ['hey aira', 'hey era', 'hey ira', 'hey ara', 'hey error', 'hey aria']
 
 function TypingIndicator() {
   return (
@@ -69,9 +66,7 @@ function TypingIndicator() {
       </div>
       <div className="aira-panel px-4 py-3">
         <div className="flex items-center gap-1.5">
-          <div className="w-1.5 h-1.5 rounded-full bg-aira-blue typing-dot" />
-          <div className="w-1.5 h-1.5 rounded-full bg-aira-blue typing-dot" />
-          <div className="w-1.5 h-1.5 rounded-full bg-aira-blue typing-dot" />
+          {[0, 1, 2].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-aira-blue typing-dot" />)}
         </div>
       </div>
     </div>
@@ -87,41 +82,28 @@ function Message({ message, onCopy, onSpeak }) {
       }`}>
         {isUser ? <span className="text-xs font-bold text-aira-gold">V</span> : <Zap className="w-3.5 h-3.5 text-aira-blue" />}
       </div>
-      <div className={`group relative max-w-[80%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
+      <div className={`group relative max-w-[80%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
         <div className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
-          isUser
-            ? 'bg-aira-blue/10 border border-aira-blue/20 text-aira-text'
-            : 'bg-aira-panel border border-aira-border text-aira-text'
+          isUser ? 'bg-aira-blue/10 border border-aira-blue/20 text-aira-text' : 'bg-aira-panel border border-aira-border text-aira-text'
         }`}>
-          {isUser ? (
-            <p className="whitespace-pre-wrap">{message.content}</p>
-          ) : (
-            <div className="prose prose-invert prose-sm max-w-none
-              prose-p:my-1 prose-headings:text-aira-blue prose-headings:font-semibold
-              prose-code:text-aira-blue prose-code:bg-aira-darker prose-code:px-1 prose-code:rounded
-              prose-pre:bg-aira-darker prose-pre:border prose-pre:border-aira-border
-              prose-li:my-0.5 prose-strong:text-aira-text prose-a:text-aira-blue">
-              <ReactMarkdown>{message.content}</ReactMarkdown>
-            </div>
-          )}
+          {isUser
+            ? <p className="whitespace-pre-wrap">{message.content}</p>
+            : <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:text-aira-blue prose-headings:font-semibold prose-code:text-aira-blue prose-code:bg-aira-darker prose-code:px-1 prose-code:rounded prose-pre:bg-aira-darker prose-pre:border prose-pre:border-aira-border prose-li:my-0.5 prose-strong:text-aira-text prose-a:text-aira-blue">
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              </div>
+          }
         </div>
         <div className={`flex items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity ${isUser ? 'flex-row-reverse' : ''}`}>
-          <span className="text-xs text-aira-text-dim">
-            {message.timestamp?.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
-          </span>
-          <button onClick={() => onCopy(message.content)} className="text-aira-text-dim hover:text-aira-blue transition-colors" title="Copy">
-            <Copy className="w-3 h-3" />
-          </button>
-          {!isUser && (
-            <button onClick={() => onSpeak(message.content)} className="text-aira-text-dim hover:text-aira-blue transition-colors" title="Read aloud">
-              <Volume2 className="w-3 h-3" />
-            </button>
-          )}
+          <span className="text-xs text-aira-text-dim">{message.timestamp?.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+          <button onClick={() => onCopy(message.content)} className="text-aira-text-dim hover:text-aira-blue transition-colors"><Copy className="w-3 h-3" /></button>
+          {!isUser && <button onClick={() => onSpeak(message.content)} className="text-aira-text-dim hover:text-aira-blue transition-colors"><Volume2 className="w-3 h-3" /></button>}
         </div>
       </div>
     </div>
   )
 }
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [messages, setMessages] = useState([WELCOME_MESSAGE])
@@ -130,75 +112,134 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [streamingContent, setStreamingContent] = useState('')
   const [copied, setCopied] = useState(false)
 
-  // Voice state
+  // Voice
   const [voiceEnabled, setVoiceEnabled] = useState(true)
-  const [listening, setListening] = useState(false)        // active command listening
-  const [wakeActive, setWakeActive] = useState(false)      // background wake word mode
+  const [listening, setListening] = useState(false)
   const [speaking, setSpeaking] = useState(false)
-  const [voiceSupported] = useState('speechSynthesis' in window)
-  const [sttSupported] = useState('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
+  const [wakeReady, setWakeReady] = useState(false)
+  const [wakeFlash, setWakeFlash] = useState(false)
   const [transcript, setTranscript] = useState('')
-  const [wakeDetected, setWakeDetected] = useState(false)  // flash when wake word heard
+  const voiceSupported = 'speechSynthesis' in window
+  const sttSupported = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window
 
-  const bottomRef = useRef(null)
-  const inputRef = useRef(null)
-  const commandRecRef = useRef(null)
-  const wakeRecRef = useRef(null)
+  // Refs — avoid stale closures in callbacks
   const loadingRef = useRef(false)
   const listeningRef = useRef(false)
-  const voiceEnabledRef = useRef(true)
+  const voiceRef = useRef(true)
+  const wakeRecRef = useRef(null)
+  const cmdRecRef = useRef(null)
+  const wakeTimerRef = useRef(null)
+  const bottomRef = useRef(null)
+  const inputRef = useRef(null)
+  const messagesRef = useRef([WELCOME_MESSAGE])
 
-  // Keep refs in sync
   useEffect(() => { loadingRef.current = loading }, [loading])
   useEffect(() => { listeningRef.current = listening }, [listening])
-  useEffect(() => { voiceEnabledRef.current = voiceEnabled }, [voiceEnabled])
+  useEffect(() => { voiceRef.current = voiceEnabled }, [voiceEnabled])
+  useEffect(() => { messagesRef.current = messages }, [messages])
 
-  // ── Text-to-Speech ────────────────────────────────────────────────────────
+  // ── TTS ────────────────────────────────────────────────────────────────────
   const speak = useCallback((text, onDone) => {
-    if (!voiceSupported) return
+    if (!voiceSupported) { onDone?.(); return }
     window.speechSynthesis.cancel()
 
     const clean = stripMarkdown(text)
     if (!clean) { onDone?.(); return }
 
-    // Load voices (some browsers are async)
-    const doSpeak = () => {
-      const utterance = new SpeechSynthesisUtterance(clean)
-      utterance.voice = getBestFemaleVoice()
-      utterance.rate = 1.05
-      utterance.pitch = 1.1
-      utterance.volume = 1
-
-      utterance.onstart = () => setSpeaking(true)
-      utterance.onend = () => { setSpeaking(false); onDone?.() }
-      utterance.onerror = () => { setSpeaking(false); onDone?.() }
-
-      window.speechSynthesis.speak(utterance)
+    const fire = () => {
+      const u = new SpeechSynthesisUtterance(clean)
+      u.voice = getBestFemaleVoice()
+      u.rate = 1.45   // Fast-paced like FRIDAY
+      u.pitch = 1.1
+      u.volume = 1
+      u.onstart = () => setSpeaking(true)
+      u.onend = () => { setSpeaking(false); onDone?.() }
+      u.onerror = () => { setSpeaking(false); onDone?.() }
+      window.speechSynthesis.speak(u)
     }
 
-    if (window.speechSynthesis.getVoices().length > 0) {
-      doSpeak()
-    } else {
-      window.speechSynthesis.onvoiceschanged = () => { doSpeak() }
-    }
+    // Voices may load async
+    if (window.speechSynthesis.getVoices().length) fire()
+    else { window.speechSynthesis.onvoiceschanged = () => fire() }
   }, [voiceSupported])
 
-  const stopSpeaking = () => { window.speechSynthesis.cancel(); setSpeaking(false) }
+  const stopSpeaking = useCallback(() => { window.speechSynthesis.cancel(); setSpeaking(false) }, [])
 
-  // ── Command Listening (active) ────────────────────────────────────────────
-  const startCommandListening = useCallback(() => {
+  // ── Wake Word Engine ───────────────────────────────────────────────────────
+  // Uses short-burst mode (continuous:false) + rapid restart — more reliable on Chrome/macOS
+  const scheduleWakeRestart = useCallback((delay = 150) => {
+    clearTimeout(wakeTimerRef.current)
+    wakeTimerRef.current = setTimeout(() => {
+      if (!listeningRef.current && !loadingRef.current) startWakeListen()
+    }, delay)
+  }, [])
+
+  const stopWakeListen = useCallback(() => {
+    clearTimeout(wakeTimerRef.current)
+    try { wakeRecRef.current?.abort() } catch {}
+    wakeRecRef.current = null
+    setWakeReady(false)
+  }, [])
+
+  const startWakeListen = useCallback(() => {
+    if (!sttSupported || listeningRef.current) return
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) return
-
-    stopWakeListening()
-
     const rec = new SR()
-    commandRecRef.current = rec
-    rec.lang = 'en-US'
-    rec.interimResults = true
-    rec.continuous = false
+    wakeRecRef.current = rec
 
-    rec.onstart = () => { setListening(true); setTranscript('') }
+    rec.continuous = false
+    rec.interimResults = false
+    rec.maxAlternatives = 5
+    rec.lang = 'en-US'
+
+    rec.onstart = () => setWakeReady(true)
+
+    rec.onresult = (e) => {
+      const transcripts = []
+      for (let i = 0; i < e.results.length; i++)
+        for (let j = 0; j < e.results[i].length; j++)
+          transcripts.push(e.results[i][j].transcript.toLowerCase())
+
+      const woken = transcripts.some(t => WAKE_WORDS.some(w => t.includes(w)))
+      if (woken && !listeningRef.current && !loadingRef.current) {
+        stopWakeListen()
+        setWakeFlash(true)
+        setTimeout(() => setWakeFlash(false), 800)
+
+        if (voiceRef.current) {
+          speak('Yes, Mr. V?', () => setTimeout(() => startCmdListen(), 200))
+        } else {
+          startCmdListen()
+        }
+      }
+    }
+
+    rec.onend = () => {
+      setWakeReady(false)
+      scheduleWakeRestart(200)
+    }
+
+    rec.onerror = (e) => {
+      setWakeReady(false)
+      const delay = e.error === 'no-speech' ? 100 : 600
+      scheduleWakeRestart(delay)
+    }
+
+    try { rec.start() } catch { scheduleWakeRestart(500) }
+  }, [sttSupported, speak, stopWakeListen, scheduleWakeRestart])
+
+  // ── Command Listening ──────────────────────────────────────────────────────
+  const startCmdListen = useCallback(() => {
+    if (!sttSupported) return
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    const rec = new SR()
+    cmdRecRef.current = rec
+
+    rec.continuous = false
+    rec.interimResults = true
+    rec.lang = 'en-US'
+
+    rec.onstart = () => setListening(true)
 
     rec.onresult = (e) => {
       const text = Array.from(e.results).map(r => r[0].transcript).join('')
@@ -212,103 +253,47 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     rec.onend = () => {
       setListening(false)
       setTranscript('')
-      // Restart wake word after command listening ends
-      setTimeout(() => startWakeListening(), 300)
+      scheduleWakeRestart(300)
     }
 
-    rec.onerror = () => { setListening(false); setTranscript(''); setTimeout(() => startWakeListening(), 300) }
-
-    rec.start()
-  }, [])
-
-  const stopCommandListening = () => {
-    commandRecRef.current?.stop()
-    setListening(false)
-    setTranscript('')
-  }
-
-  // ── Wake Word Listening (background) ─────────────────────────────────────
-  const startWakeListening = useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR || listeningRef.current) return
-
-    const rec = new SR()
-    wakeRecRef.current = rec
-    rec.lang = 'en-US'
-    rec.interimResults = true
-    rec.continuous = true
-
-    rec.onstart = () => setWakeActive(true)
-
-    rec.onresult = (e) => {
-      if (listeningRef.current || loadingRef.current) return
-
-      const text = Array.from(e.results)
-        .slice(-3) // only check last 3 results
-        .map(r => r[0].transcript)
-        .join(' ')
-        .toLowerCase()
-
-      const woken = WAKE_WORDS.some(w => text.includes(w))
-      if (woken) {
-        rec.stop()
-        setWakeDetected(true)
-        setTimeout(() => setWakeDetected(false), 1000)
-
-        if (voiceEnabledRef.current) {
-          speak("Yes, Mr. V?", () => {
-            setTimeout(() => startCommandListening(), 300)
-          })
-        } else {
-          startCommandListening()
-        }
-      }
-    }
-
-    rec.onend = () => {
-      setWakeActive(false)
-      // Auto-restart unless we're in command mode
-      if (!listeningRef.current) {
-        setTimeout(() => startWakeListening(), 500)
-      }
-    }
-
-    rec.onerror = (e) => {
-      setWakeActive(false)
-      if (e.error !== 'aborted') {
-        setTimeout(() => startWakeListening(), 1000)
-      }
+    rec.onerror = () => {
+      setListening(false)
+      setTranscript('')
+      scheduleWakeRestart(300)
     }
 
     try { rec.start() } catch {}
-  }, [speak, startCommandListening])
+  }, [sttSupported, scheduleWakeRestart])
 
-  const stopWakeListening = () => {
-    try { wakeRecRef.current?.stop() } catch {}
-    setWakeActive(false)
-  }
+  const stopCmdListen = useCallback(() => {
+    try { cmdRecRef.current?.stop() } catch {}
+    setListening(false)
+    setTranscript('')
+  }, [])
 
-  // Start wake word on mount
+  // Init wake word on mount
   useEffect(() => {
-    if (sttSupported) {
-      const timer = setTimeout(() => startWakeListening(), 1500)
-      return () => {
-        clearTimeout(timer)
-        stopWakeListening()
-        stopCommandListening()
-      }
+    if (!sttSupported) return
+    const t = setTimeout(() => startWakeListen(), 1200)
+    return () => {
+      clearTimeout(t)
+      clearTimeout(wakeTimerRef.current)
+      stopWakeListen()
+      stopCmdListen()
+      stopSpeaking()
     }
-  }, [sttSupported])
+  }, [])
 
-  // Speak welcome message
+  // Speak welcome
   useEffect(() => {
-    if (voiceEnabled && voiceSupported) {
-      const timer = setTimeout(() => speak("AIRA online. Good day, Mr. V. How can I assist?"), 1000)
-      return () => clearTimeout(timer)
-    }
-  }, [voiceSupported])
+    if (!voiceSupported) return
+    const t = setTimeout(() => {
+      if (voiceRef.current) speak('AIRA online. Good day, Mr. V.')
+    }, 900)
+    return () => clearTimeout(t)
+  }, [])
 
-  // Handle pending message from briefing modal
+  // Pending message from briefing modal
   useEffect(() => {
     if (pendingMessage && !loadingRef.current) {
       sendMessage(pendingMessage)
@@ -316,104 +301,93 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     }
   }, [pendingMessage])
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamingContent, loading])
+  // Scroll to bottom
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, streamingContent, loading])
 
-  const handleCopy = (text) => {
-    navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
+  const handleCopy = (text) => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }
 
   // ── Send Message ──────────────────────────────────────────────────────────
   const sendMessage = async (text = input) => {
-    const userMessage = text.trim()
-    if (!userMessage || loadingRef.current) return
+    const msg = (typeof text === 'string' ? text : input).trim()
+    if (!msg || loadingRef.current) return
 
     stopSpeaking()
-    stopCommandListening()
-    stopWakeListening()
+    stopCmdListen()
+    stopWakeListen()
 
     setInput('')
     setTranscript('')
-    const newMessages = [...messages, { role: 'user', content: userMessage, timestamp: new Date() }]
-    setMessages(newMessages)
+
+    const current = messagesRef.current
+    const updated = [...current, { role: 'user', content: msg, timestamp: new Date() }]
+    setMessages(updated)
+    messagesRef.current = updated
     setLoading(true)
     setStreamingContent('')
 
-    const history = newMessages
-      .filter(m => m.role !== 'system')
-      .slice(-20)
-      .map(m => ({ role: m.role, content: m.content }))
+    const history = updated.slice(-20).map(m => ({ role: m.role, content: m.content }))
 
     try {
-      const response = await fetch('/api/chat/stream', {
+      const res = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, history: history.slice(0, -1) }),
+        body: JSON.stringify({ message: msg, history: history.slice(0, -1) }),
       })
 
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let fullContent = ''
+      const reader = res.body.getReader()
+      const dec = new TextDecoder()
+      let full = ''
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value)
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.token) { fullContent += data.token; setStreamingContent(fullContent) }
-              if (data.done) {
-                setMessages(prev => [...prev, { role: 'assistant', content: fullContent, timestamp: new Date() }])
-                setStreamingContent('')
-                if (voiceEnabledRef.current) {
-                  speak(fullContent, () => setTimeout(() => startWakeListening(), 300))
-                } else {
-                  setTimeout(() => startWakeListening(), 300)
-                }
-              }
-            } catch {}
-          }
+        for (const line of dec.decode(value).split('\n')) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const d = JSON.parse(line.slice(6))
+            if (d.token) { full += d.token; setStreamingContent(full) }
+            if (d.done) {
+              const aiMsg = { role: 'assistant', content: full, timestamp: new Date() }
+              setMessages(prev => { messagesRef.current = [...prev, aiMsg]; return [...prev, aiMsg] })
+              setStreamingContent('')
+              if (voiceRef.current) speak(full, () => scheduleWakeRestart(300))
+              else scheduleWakeRestart(300)
+            }
+          } catch {}
         }
       }
     } catch {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: '⚠️ Connection error. Please check the backend is running.',
-        timestamp: new Date(),
-      }])
+      setMessages(prev => {
+        const e = { role: 'assistant', content: '⚠️ Connection lost. Is the backend running?', timestamp: new Date() }
+        messagesRef.current = [...prev, e]
+        return [...prev, e]
+      })
       setStreamingContent('')
-      setTimeout(() => startWakeListening(), 300)
+      scheduleWakeRestart(300)
     } finally {
       setLoading(false)
       inputRef.current?.focus()
     }
   }
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
-  }
-
-  const clearChat = () => {
-    stopSpeaking()
-    setMessages([WELCOME_MESSAGE])
-    setStreamingContent('')
+  const toggleMic = () => {
+    if (listening) { stopCmdListen(); scheduleWakeRestart(300) }
+    else { stopWakeListen(); startCmdListen() }
   }
 
   const toggleVoice = () => {
     const next = !voiceEnabled
     setVoiceEnabled(next)
-    voiceEnabledRef.current = next
+    voiceRef.current = next
     if (!next) stopSpeaking()
   }
 
-  const toggleMic = () => {
-    if (listening) { stopCommandListening(); setTimeout(() => startWakeListening(), 300) }
-    else { startCommandListening() }
+  const clearChat = () => {
+    stopSpeaking()
+    const m = [{ ...WELCOME_MESSAGE, timestamp: new Date() }]
+    setMessages(m)
+    messagesRef.current = m
+    setStreamingContent('')
   }
 
   return (
@@ -425,32 +399,21 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           <Zap className="w-4 h-4 text-aira-blue" />
           <span className="text-xs font-mono text-aira-text-dim tracking-widest">AIRA INTERFACE</span>
 
-          {/* Status badges */}
-          {speaking && (
-            <span className="flex items-center gap-1 text-xs text-aira-green font-mono animate-pulse">
-              <Volume2 className="w-3 h-3" /> SPEAKING
-            </span>
-          )}
-          {listening && (
-            <span className="flex items-center gap-1 text-xs text-red-400 font-mono animate-pulse">
-              <Mic className="w-3 h-3" /> LISTENING
-            </span>
-          )}
-          {wakeActive && !listening && !speaking && (
-            <span className={`flex items-center gap-1 text-xs font-mono transition-colors ${wakeDetected ? 'text-aira-blue animate-pulse' : 'text-aira-text-dim/50'}`}>
+          {speaking && <span className="flex items-center gap-1 text-xs text-aira-green font-mono animate-pulse"><Volume2 className="w-3 h-3" />SPEAKING</span>}
+          {listening && <span className="flex items-center gap-1 text-xs text-red-400 font-mono animate-pulse"><Mic className="w-3 h-3" />LISTENING</span>}
+          {!speaking && !listening && sttSupported && (
+            <span className={`flex items-center gap-1 text-xs font-mono transition-all ${
+              wakeFlash ? 'text-aira-blue scale-105' : wakeReady ? 'text-aira-text-dim/60' : 'text-aira-text-dim/30'
+            }`}>
               <Radio className="w-3 h-3" />
-              {wakeDetected ? 'WAKE WORD DETECTED' : 'STANDBY — SAY "HEY AIRA"'}
+              {wakeFlash ? 'WAKE WORD DETECTED' : wakeReady ? 'STANDBY · "HEY AIRA"' : 'INITIALISING…'}
             </span>
           )}
         </div>
 
         <div className="flex items-center gap-3">
           {voiceSupported && (
-            <button
-              onClick={toggleVoice}
-              className={`flex items-center gap-1.5 text-xs transition-colors ${voiceEnabled ? 'text-aira-blue' : 'text-aira-text-dim'}`}
-              title={voiceEnabled ? 'Mute AIRA' : 'Unmute AIRA'}
-            >
+            <button onClick={toggleVoice} className={`flex items-center gap-1.5 text-xs transition-colors ${voiceEnabled ? 'text-aira-blue' : 'text-aira-text-dim'}`}>
               {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
               <span className="font-mono">{voiceEnabled ? 'VOICE ON' : 'VOICE OFF'}</span>
             </button>
@@ -464,9 +427,8 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
-        {messages.map((msg, i) => (
-          <Message key={i} message={msg} onCopy={handleCopy} onSpeak={speak} />
-        ))}
+        {messages.map((msg, i) => <Message key={i} message={msg} onCopy={handleCopy} onSpeak={speak} />)}
+
         {streamingContent && (
           <div className="flex items-start gap-3 message-enter">
             <div className="w-7 h-7 rounded-full bg-aira-blue/10 border border-aira-blue/30 flex items-center justify-center flex-shrink-0">
@@ -480,6 +442,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
             </div>
           </div>
         )}
+
         {loading && !streamingContent && <TypingIndicator />}
         <div ref={bottomRef} />
       </div>
@@ -487,10 +450,10 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       {/* Quick Prompts */}
       {messages.length <= 1 && (
         <div className="px-4 pb-2 flex gap-2 flex-wrap flex-shrink-0">
-          {QUICK_PROMPTS.map((prompt, i) => (
-            <button key={i} onClick={() => sendMessage(prompt)}
+          {QUICK_PROMPTS.map((p, i) => (
+            <button key={i} onClick={() => sendMessage(p)}
               className="text-xs px-3 py-1.5 rounded-full border border-aira-border text-aira-text-dim hover:border-aira-blue hover:text-aira-blue transition-colors">
-              {prompt}
+              {p}
             </button>
           ))}
         </div>
@@ -498,40 +461,35 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
 
       {/* Input */}
       <div className="px-4 py-3 border-t border-aira-border flex-shrink-0">
-        {copied && <div className="text-xs text-aira-green font-mono mb-2 animate-fadeIn">✓ Copied</div>}
-        {transcript && (
-          <div className="text-xs text-aira-blue font-mono mb-2 animate-pulse">🎤 "{transcript}"</div>
-        )}
+        {copied && <div className="text-xs text-aira-green font-mono mb-2">✓ Copied</div>}
+        {transcript && <div className="text-xs text-aira-blue font-mono mb-2 animate-pulse">🎤 "{transcript}"</div>}
+
         <div className="flex items-end gap-2">
           {sttSupported && (
-            <button onClick={toggleMic} disabled={loading} title={listening ? 'Stop' : 'Speak to AIRA'}
+            <button onClick={toggleMic} disabled={loading} title={listening ? 'Stop' : 'Speak'}
               className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
-                listening
-                  ? 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-500/30'
-                  : 'bg-aira-darker border border-aira-border text-aira-text-dim hover:border-aira-blue hover:text-aira-blue'
+                listening ? 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-500/30' : 'bg-aira-darker border border-aira-border text-aira-text-dim hover:border-aira-blue hover:text-aira-blue'
               }`}>
               {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
             </button>
           )}
+
           <div className="flex-1 bg-aira-darker border border-aira-border rounded-xl px-4 py-2.5 focus-within:border-aira-blue transition-colors">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
+            <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
               placeholder={listening ? 'Listening… speak now' : 'Message AIRA or say "Hey AIRA"…'}
               className="w-full bg-transparent text-sm text-aira-text placeholder-aira-text-dim outline-none resize-none max-h-32 min-h-[24px]"
-              rows={1}
-              style={{ height: 'auto' }}
+              rows={1} style={{ height: 'auto' }}
               onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px' }}
-              disabled={loading}
-            />
+              disabled={loading} />
           </div>
+
           <button onClick={() => sendMessage()} disabled={!input.trim() || loading}
             className="w-10 h-10 rounded-xl bg-aira-blue flex items-center justify-center hover:bg-aira-blue-dim transition-colors disabled:opacity-30 disabled:cursor-not-allowed active:scale-95 flex-shrink-0">
             <Send className="w-4 h-4 text-aira-darker" />
           </button>
         </div>
+
         <p className="text-xs text-aira-text-dim mt-2 text-center font-mono">
           AIRA · Groq LLaMA 3.3 70B · Say "Hey AIRA" to wake · Built for Mr. V
         </p>
