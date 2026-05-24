@@ -1,7 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react'
-import { Send, Zap, Copy, RotateCcw, Mic } from 'lucide-react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { Send, Zap, Copy, RotateCcw, Mic, MicOff, Volume2, VolumeX } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
-import axios from 'axios'
 
 const WELCOME_MESSAGE = {
   role: 'assistant',
@@ -29,6 +28,41 @@ const QUICK_PROMPTS = [
   "Summarize something",
 ]
 
+// Strip markdown so TTS doesn't read symbols aloud
+function stripMarkdown(text) {
+  return text
+    .replace(/#{1,6}\s+/g, '')           // headings
+    .replace(/\*\*(.+?)\*\*/g, '$1')     // bold
+    .replace(/\*(.+?)\*/g, '$1')         // italic
+    .replace(/`{1,3}[^`]*`{1,3}/g, '')  // code
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1') // links
+    .replace(/^[-*+]\s+/gm, '')          // bullets
+    .replace(/^\d+\.\s+/gm, '')          // numbered lists
+    .replace(/^>\s+/gm, '')              // blockquotes
+    .replace(/\n{2,}/g, '. ')            // double newlines → pause
+    .replace(/\n/g, ' ')                 // single newlines
+    .trim()
+}
+
+// Pick the best available voice — prefer a deep British/US male
+function getBestVoice() {
+  const voices = window.speechSynthesis.getVoices()
+  const preferred = [
+    'Google UK English Male',
+    'Microsoft George - English (United Kingdom)',
+    'Daniel',
+    'Google US English',
+    'Microsoft David - English (United States)',
+    'Alex',
+  ]
+  for (const name of preferred) {
+    const match = voices.find(v => v.name === name)
+    if (match) return match
+  }
+  // Fallback: any English male-sounding voice
+  return voices.find(v => v.lang.startsWith('en')) || voices[0] || null
+}
+
 function TypingIndicator() {
   return (
     <div className="flex items-start gap-3 message-enter">
@@ -46,7 +80,7 @@ function TypingIndicator() {
   )
 }
 
-function Message({ message, onCopy }) {
+function Message({ message, onCopy, onSpeak }) {
   const isUser = message.role === 'user'
 
   return (
@@ -83,17 +117,19 @@ function Message({ message, onCopy }) {
           )}
         </div>
 
-        {/* Timestamp + Copy */}
+        {/* Timestamp + Copy + Speak */}
         <div className={`flex items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity ${isUser ? 'flex-row-reverse' : ''}`}>
           <span className="text-xs text-aira-text-dim">
             {message.timestamp?.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
           </span>
-          <button
-            onClick={() => onCopy(message.content)}
-            className="text-aira-text-dim hover:text-aira-blue transition-colors"
-          >
+          <button onClick={() => onCopy(message.content)} className="text-aira-text-dim hover:text-aira-blue transition-colors" title="Copy">
             <Copy className="w-3 h-3" />
           </button>
+          {!isUser && (
+            <button onClick={() => onSpeak(message.content)} className="text-aira-text-dim hover:text-aira-blue transition-colors" title="Read aloud">
+              <Volume2 className="w-3 h-3" />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -106,9 +142,29 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [loading, setLoading] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [copied, setCopied] = useState(false)
+
+  // Voice state
+  const [voiceEnabled, setVoiceEnabled] = useState(true)   // TTS on/off
+  const [listening, setListening] = useState(false)         // STT active
+  const [speaking, setSpeaking] = useState(false)           // TTS currently speaking
+  const [voiceSupported, setVoiceSupported] = useState(false)
+  const [sttSupported, setSttSupported] = useState(false)
+  const [transcript, setTranscript] = useState('')          // live STT preview
+
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
-  const abortRef = useRef(null)
+  const recognitionRef = useRef(null)
+
+  // Check browser support & load voices
+  useEffect(() => {
+    setVoiceSupported('speechSynthesis' in window)
+    setSttSupported('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
+
+    // Voices load async in some browsers
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = () => {}
+    }
+  }, [])
 
   // Handle pending messages from DailyBriefing
   useEffect(() => {
@@ -122,17 +178,102 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingContent, loading])
 
+  // ── Text-to-Speech ──────────────────────────────────────────────────────────
+  const speak = useCallback((text) => {
+    if (!voiceSupported) return
+    window.speechSynthesis.cancel() // stop any current speech
+
+    const clean = stripMarkdown(text)
+    if (!clean) return
+
+    const utterance = new SpeechSynthesisUtterance(clean)
+    utterance.voice = getBestVoice()
+    utterance.rate = 0.95
+    utterance.pitch = 0.85
+    utterance.volume = 1
+
+    utterance.onstart = () => setSpeaking(true)
+    utterance.onend = () => setSpeaking(false)
+    utterance.onerror = () => setSpeaking(false)
+
+    window.speechSynthesis.speak(utterance)
+  }, [voiceSupported])
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel()
+    setSpeaking(false)
+  }
+
+  // ── Speech-to-Text ──────────────────────────────────────────────────────────
+  const startListening = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) return
+
+    const recognition = new SR()
+    recognitionRef.current = recognition
+    recognition.lang = 'en-US'
+    recognition.interimResults = true
+    recognition.continuous = false
+
+    recognition.onstart = () => {
+      setListening(true)
+      setTranscript('')
+    }
+
+    recognition.onresult = (e) => {
+      const current = Array.from(e.results)
+        .map(r => r[0].transcript)
+        .join('')
+      setTranscript(current)
+
+      if (e.results[e.results.length - 1].isFinal) {
+        setInput(current)
+        setTranscript('')
+      }
+    }
+
+    recognition.onend = () => {
+      setListening(false)
+      setTranscript('')
+    }
+
+    recognition.onerror = () => {
+      setListening(false)
+      setTranscript('')
+    }
+
+    recognition.start()
+  }
+
+  const stopListening = () => {
+    recognitionRef.current?.stop()
+    setListening(false)
+    setTranscript('')
+  }
+
+  const toggleListening = () => {
+    if (listening) stopListening()
+    else startListening()
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
   const handleCopy = (text) => {
     navigator.clipboard.writeText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // ── Send Message ─────────────────────────────────────────────────────────────
   const sendMessage = async (text = input) => {
     const userMessage = text.trim()
     if (!userMessage || loading) return
 
+    // Stop any ongoing speech/listening
+    stopSpeaking()
+    if (listening) stopListening()
+
     setInput('')
+    setTranscript('')
     const newMessages = [...messages, { role: 'user', content: userMessage, timestamp: new Date() }]
     setMessages(newMessages)
     setLoading(true)
@@ -173,23 +314,30 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
                 setStreamingContent(fullContent)
               }
               if (data.done) {
-                setMessages(prev => [...prev, {
+                const assistantMsg = {
                   role: 'assistant',
                   content: fullContent,
                   timestamp: new Date(),
-                }])
+                }
+                setMessages(prev => [...prev, assistantMsg])
                 setStreamingContent('')
+
+                // Speak the response if voice is enabled
+                if (voiceEnabled) {
+                  speak(fullContent)
+                }
               }
             } catch {}
           }
         }
       }
     } catch (err) {
-      setMessages(prev => [...prev, {
+      const errorMsg = {
         role: 'assistant',
         content: '⚠️ Connection error. Please check that the backend is running and try again.',
         timestamp: new Date(),
-      }])
+      }
+      setMessages(prev => [...prev, errorMsg])
       setStreamingContent('')
     } finally {
       setLoading(false)
@@ -205,9 +353,18 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   }
 
   const clearChat = () => {
+    stopSpeaking()
     setMessages([WELCOME_MESSAGE])
     setStreamingContent('')
   }
+
+  // Speak welcome message on first load
+  useEffect(() => {
+    if (voiceEnabled && voiceSupported) {
+      const timer = setTimeout(() => speak(WELCOME_MESSAGE.content), 800)
+      return () => clearTimeout(timer)
+    }
+  }, [voiceSupported])
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -217,20 +374,47 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         <div className="flex items-center gap-2">
           <Zap className="w-4 h-4 text-aira-blue" />
           <span className="text-xs font-mono text-aira-text-dim tracking-widest">AIRA INTERFACE</span>
+          {speaking && (
+            <span className="flex items-center gap-1 text-xs text-aira-green font-mono animate-pulse">
+              <Volume2 className="w-3 h-3" /> SPEAKING
+            </span>
+          )}
+          {listening && (
+            <span className="flex items-center gap-1 text-xs text-red-400 font-mono animate-pulse">
+              <Mic className="w-3 h-3" /> LISTENING
+            </span>
+          )}
         </div>
-        <button
-          onClick={clearChat}
-          className="flex items-center gap-1.5 text-xs text-aira-text-dim hover:text-aira-blue transition-colors"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span>New Chat</span>
-        </button>
+
+        <div className="flex items-center gap-3">
+          {/* Voice toggle */}
+          {voiceSupported && (
+            <button
+              onClick={() => { setVoiceEnabled(!voiceEnabled); stopSpeaking() }}
+              className={`flex items-center gap-1.5 text-xs transition-colors ${voiceEnabled ? 'text-aira-blue' : 'text-aira-text-dim'}`}
+              title={voiceEnabled ? 'Mute AIRA' : 'Unmute AIRA'}
+            >
+              {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+              <span className="font-mono">{voiceEnabled ? 'VOICE ON' : 'VOICE OFF'}</span>
+            </button>
+          )}
+
+          <div className="h-4 w-px bg-aira-border" />
+
+          <button
+            onClick={clearChat}
+            className="flex items-center gap-1.5 text-xs text-aira-text-dim hover:text-aira-blue transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>New Chat</span>
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
         {messages.map((msg, i) => (
-          <Message key={i} message={msg} onCopy={handleCopy} />
+          <Message key={i} message={msg} onCopy={handleCopy} onSpeak={speak} />
         ))}
 
         {/* Streaming message */}
@@ -275,14 +459,38 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         {copied && (
           <div className="text-xs text-aira-green font-mono mb-2 animate-fadeIn">✓ Copied to clipboard</div>
         )}
-        <div className="flex items-end gap-3">
+
+        {/* Live transcript preview */}
+        {transcript && (
+          <div className="text-xs text-aira-blue font-mono mb-2 animate-pulse">
+            🎤 "{transcript}"
+          </div>
+        )}
+
+        <div className="flex items-end gap-2">
+          {/* Mic button */}
+          {sttSupported && (
+            <button
+              onClick={toggleListening}
+              disabled={loading}
+              title={listening ? 'Stop listening' : 'Speak to AIRA'}
+              className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
+                listening
+                  ? 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-500/30'
+                  : 'bg-aira-darker border border-aira-border text-aira-text-dim hover:border-aira-blue hover:text-aira-blue'
+              }`}
+            >
+              {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+          )}
+
           <div className="flex-1 bg-aira-darker border border-aira-border rounded-xl px-4 py-2.5 focus-within:border-aira-blue transition-colors">
             <textarea
               ref={inputRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Message AIRA... (Enter to send, Shift+Enter for new line)"
+              placeholder={listening ? 'Listening... speak now' : 'Message AIRA or press 🎤 to speak...'}
               className="w-full bg-transparent text-sm text-aira-text placeholder-aira-text-dim outline-none resize-none max-h-32 min-h-[24px]"
               rows={1}
               style={{ height: 'auto' }}
@@ -293,6 +501,8 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
               disabled={loading}
             />
           </div>
+
+          {/* Send button */}
           <button
             onClick={() => sendMessage()}
             disabled={!input.trim() || loading}
@@ -301,6 +511,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
             <Send className="w-4 h-4 text-aira-darker" />
           </button>
         </div>
+
         <p className="text-xs text-aira-text-dim mt-2 text-center font-mono">
           AIRA · Powered by Groq LLaMA 3.3 70B · Built for Mr. V
         </p>
