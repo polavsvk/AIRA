@@ -1,0 +1,151 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+  }
+
+  body {
+    background-color: #050510;
+    color: #c9d1d9;
+    font-family: 'Inter', system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #0d1117;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #1a2332;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #00d4ff44;
+  }
+}
+
+@layer components {
+  .aira-panel {
+    @apply bg-aira-panel border border-aira-border rounded-xl;
+  }
+
+  .aira-btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 cursor-pointer;
+  }
+
+  .aira-btn-primary {
+    @apply aira-btn bg-aira-blue text-aira-darker hover:bg-aira-blue-dim active:scale-95;
+  }
+
+  .aira-btn-ghost {
+    @apply aira-btn bg-transparent border border-aira-border text-aira-text-dim hover:border-aira-blue hover:text-aira-blue;
+  }
+
+  .aira-input {
+    @apply bg-aira-darker border border-aira-border rounded-lg px-4 py-2 text-aira-text placeholder-aira-text-dim outline-none focus:border-aira-blue transition-colors duration-200;
+  }
+
+  .glow-text {
+    text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+  }
+
+  .priority-high {
+    @apply text-red-400 border-red-400;
+  }
+
+  .priority-medium {
+    @apply text-yellow-400 border-yellow-400;
+  }
+
+  .priority-low {
+    @apply text-green-400 border-green-400;
+  }
+}
+
+/* Typing indicator animation */
+.typing-dot {
+  animation: typingBounce 1.4s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* Scanning line animation */
+@keyframes scan {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+
+.scan-line {
+  animation: scan 3s linear infinite;
+}
+
+/* Hexagon border glow */
+.hex-glow {
+  filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.6));
+}
+
+/* Message fade in */
+.message-enter {
+  animation: messageSlideIn 0.3s ease-out forwards;
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Arc reactor pulse */
+@keyframes arcPulse {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(0, 212, 255, 0.4), 0 0 20px rgba(0, 212, 255, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(0, 212, 255, 0.8), 0 0 40px rgba(0, 212, 255, 0.4);
+  }
+}
+
+.arc-pulse {
+  animation: arcPulse 2s ease-in-out infinite;
+}
+
+/* Status indicator blink */
+@keyframes statusBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.status-blink {
+  animation: statusBlink 2s ease-in-out infinite;
+}
