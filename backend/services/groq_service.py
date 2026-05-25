@@ -1,6 +1,6 @@
 """
 NOVA Groq Service
-LLM integration with full function calling / tool use support.
+LLM integration with full function calling, memory injection, and screen awareness.
 """
 
 import os
@@ -10,7 +10,10 @@ from groq import Groq
 from typing import List, AsyncGenerator
 from dotenv import load_dotenv
 from datetime import datetime
+
 from .tools_service import NOVA_TOOLS, execute_tool, tool_file_write_confirmed
+from .memory_service import get_memory_context, extract_facts_from_conversation
+from .screen_service import analyze_screen
 
 load_dotenv()
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
@@ -70,6 +73,11 @@ BROWSER (Chrome by default, specific browser if asked):
 - Verify information from multiple sources if needed
 - Execute any browser task Mr. V instructs — nothing beyond that
 
+SCREEN:
+- You can see Mr. V's screen when asked
+- Describe exactly what's there — app, content, errors, anything notable
+- Use this to help debug, review, or understand what he's looking at
+
 MAC CONTROL:
 - Open any app, folder, or file when asked
 - Run system tasks when instructed
@@ -82,6 +90,11 @@ RULES:
 - If something fails, say why in one line and ask what to do
 - Stay sharp. You're NOVA, not a loading screen.
 
+## Memory
+- You have persistent memory. Facts you've learned about Mr. V are injected below.
+- When you learn something new and important, it will be remembered for next time automatically.
+- Treat remembered facts as reliable context — don't re-ask things you already know.
+
 ## Data integrity rule — CRITICAL:
 When you receive a briefing with specific data (weather readings, news headlines, task lists), treat that data as GROUND TRUTH.
 Do NOT invent weather conditions, news stories, meetings, flights, or tasks that aren't in the data provided.
@@ -89,26 +102,34 @@ If data is missing, say so plainly and move on — never fabricate.
 
 You are not an assistant. You are THE assistant to Mr. V."""
 
-# In-memory store for pending confirmations (confirmation_id → data)
+
+# Pending confirmations store
 pending_confirmations: dict = {}
 
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
 def _build_system_message() -> str:
-    """Inject current time into system prompt so NOVA is always time-aware."""
+    """Build system message: base prompt + current time + memory facts."""
     now = datetime.now()
     time_ctx = (
         f"\n\nCurrent time: {now.strftime('%I:%M %p')} on "
         f"{now.strftime('%A, %B %d, %Y')}."
     )
+
+    # Inject long-term memory facts
+    memory_ctx = get_memory_context()
+    if memory_ctx:
+        time_ctx += f"\n\n{memory_ctx}"
+
     return NOVA_SYSTEM_PROMPT + time_ctx
 
 
 def _build_messages(message: str, history: List[dict]) -> list:
     msgs = [{"role": "system", "content": _build_system_message()}]
     for m in history[-20:]:
-        msgs.append({"role": m["role"], "content": m["content"]})
+        if m.get("role") in ("user", "assistant") and m.get("content"):
+            msgs.append({"role": m["role"], "content": m["content"]})
     msgs.append({"role": "user", "content": message})
     return msgs
 
@@ -117,7 +138,8 @@ def _build_messages(message: str, history: List[dict]) -> list:
 
 async def get_chat_response_stream_with_tools(
     message: str,
-    history: List[dict] = []
+    history: List[dict] = [],
+    session_id: str = "default",
 ) -> AsyncGenerator[dict, None]:
     """
     Main chat entry point. Streams events:
@@ -134,6 +156,7 @@ async def get_chat_response_stream_with_tools(
 
     messages = _build_messages(message, history)
     max_tool_rounds = 6
+    full_response = ""
 
     for _ in range(max_tool_rounds):
         try:
@@ -153,9 +176,8 @@ async def get_chat_response_stream_with_tools(
 
         msg = response.choices[0].message
 
-        # ── Tool calls requested ──────────────────────────────────────────────
+        # ── Tool calls ────────────────────────────────────────────────────────
         if msg.tool_calls:
-            # Add assistant turn to history
             messages.append({
                 "role": "assistant",
                 "content": msg.content or "",
@@ -181,7 +203,15 @@ async def get_chat_response_stream_with_tools(
 
                 yield {"type": "tool_call", "tool": tool_name, "args": args}
 
-                result = await execute_tool(tool_name, args)
+                # Screen read is handled here — needs the groq client
+                if tool_name == "screen_read":
+                    try:
+                        result_text = await analyze_screen(client, args.get("question"))
+                        result = {"success": True, "result": result_text}
+                    except Exception as e:
+                        result = {"success": False, "result": f"Screen capture failed: {e}"}
+                else:
+                    result = await execute_tool(tool_name, args)
 
                 if result.get("requires_confirmation"):
                     conf_id = f"conf_{tc.id}"
@@ -216,23 +246,29 @@ async def get_chat_response_stream_with_tools(
                         "content": result_str,
                     })
 
-            # Loop back for next LLM turn
-            continue
+            continue  # Next LLM turn
 
         # ── Final text response ───────────────────────────────────────────────
-        full = msg.content or ""
-        # Stream word-by-word for the typing effect
-        words = full.split(" ")
+        full_response = msg.content or ""
+
+        # Stream word by word
+        words = full_response.split(" ")
         for i, word in enumerate(words):
             chunk = word + (" " if i < len(words) - 1 else "")
             yield {"type": "token", "content": chunk}
             await asyncio.sleep(0.008)
 
-        yield {"type": "done", "full_content": full}
+        yield {"type": "done", "full_content": full_response}
+
+        # Background: extract facts from this conversation
+        all_messages = [{"role": m["role"], "content": m["content"]}
+                        for m in messages[1:] if m.get("role") in ("user", "assistant")]
+        asyncio.create_task(extract_facts_from_conversation(all_messages, client))
+
         return
 
     # Exceeded tool rounds
-    msg = "Hit my tool round limit, Mr. V. Something's looping — want me to try a different approach?"
+    msg = "Hit my tool round limit, Mr. V. Something's looping — want me to try differently?"
     yield {"type": "token", "content": msg}
     yield {"type": "done", "full_content": msg}
 
@@ -240,7 +276,6 @@ async def get_chat_response_stream_with_tools(
 # ─── Confirmation ─────────────────────────────────────────────────────────────
 
 async def confirm_action(confirmation_id: str) -> dict:
-    """Execute a previously staged sensitive action after Mr. V confirms."""
     if confirmation_id not in pending_confirmations:
         return {"success": False, "result": "Confirmation not found or already used."}
 
@@ -257,19 +292,21 @@ async def confirm_action(confirmation_id: str) -> dict:
 # ─── Opening Greeting ─────────────────────────────────────────────────────────
 
 def get_opening_greeting() -> str:
-    """Ask NOVA to generate a time-aware greeting — no hardcoded strings."""
+    """Prompt for NOVA to generate a time-aware, memory-aware greeting."""
     now = datetime.now()
+    memory_ctx = get_memory_context()
+    memory_note = f"\n\n{memory_ctx}" if memory_ctx else ""
     return (
         f"New session starting. Time: {now.strftime('%I:%M %p')}, "
-        f"{now.strftime('%A, %B %d, %Y')}.\n\n"
-        "Greet Mr. V in one sentence — natural, warm, to the point. "
-        "Let the time of day guide you. If it's evening, maybe ask how "
-        "his day went. If it's morning, set the tone for the day. "
+        f"{now.strftime('%A, %B %d, %Y')}.{memory_note}\n\n"
+        "Greet Mr. V in one or two sentences — natural, warm, to the point. "
+        "Let the time of day guide you. If it's evening, maybe ask how his day went. "
+        "If you have memory context above, reference it naturally if relevant. "
         "Don't be stiff. Don't gush. Stay sharp — you're still NOVA."
     )
 
 
-# ─── Sync fallback (used by briefing endpoint) ───────────────────────────────
+# ─── Sync fallback ────────────────────────────────────────────────────────────
 
 def get_chat_response(message: str, history: List[dict] = []) -> str:
     if not client:

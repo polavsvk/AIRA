@@ -158,6 +158,23 @@ NOVA_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "screen_read",
+            "description": "Take a screenshot of Mr. V's screen and analyse what's on it. Use when he asks what's on his screen, to help debug something visible, or to understand what he's looking at.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Optional: specific question about the screen content"
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]
 

@@ -3,9 +3,23 @@ import {
   Send, Zap, Copy, RotateCcw, Mic, MicOff,
   Volume2, VolumeX, Radio, Globe, FileText,
   CheckCircle, XCircle, Loader, AlertTriangle,
+  Brain, Monitor,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
+
+// ─── Session ID ───────────────────────────────────────────────────────────────
+// Persistent across page refreshes, unique per browser/device
+
+function getOrCreateSessionId() {
+  const stored = localStorage.getItem('nova_session_id')
+  if (stored) return stored
+  const id = 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+  localStorage.setItem('nova_session_id', id)
+  return id
+}
+
+const SESSION_ID = getOrCreateSessionId()
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -14,10 +28,10 @@ const WAKE_WORDS = ['hey nova', 'hey nora', 'nova', 'okay nova', 'ok nova']
 const QUICK_PROMPTS = [
   'Give me my briefing',
   'Open my Gmail',
-  'What\'s in the news today?',
+  'What\'s on my screen?',
   'Play something on YouTube',
   'What should I focus on today?',
-  'Search Wikipedia for something',
+  'Search the web for something',
 ]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -314,16 +328,28 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
 
   // ── Init ──────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    // Load AI-generated greeting
-    const loadGreeting = async () => {
+    const init = async () => {
       try {
-        const res = await axios.get('/api/chat/greeting', { timeout: 8000 })
-        const greet = res.data?.greeting || 'NOVA online. Good day, Mr. V.'
-        const msg = { role: 'assistant', content: greet, timestamp: new Date(), toolEvents: [] }
-        setMessages([msg])
-        messagesRef.current = [msg]
+        // Load previous conversation history
+        const histRes = await axios.get('/api/memory/history?limit=40', { timeout: 6000 })
+        const pastMessages = (histRes.data?.messages || []).map(m => ({
+          role: m.role,
+          content: m.content,
+          timestamp: new Date(),
+          toolEvents: [],
+          fromHistory: true,
+        }))
+
+        // Load AI-generated greeting (memory-aware)
+        const greetRes = await axios.get('/api/chat/greeting', { timeout: 10000 })
+        const greet = greetRes.data?.greeting || 'NOVA online. Good day, Mr. V.'
+        const greetMsg = { role: 'assistant', content: greet, timestamp: new Date(), toolEvents: [] }
+
+        const allMsgs = [...pastMessages, greetMsg]
+        setMessages(allMsgs)
+        messagesRef.current = allMsgs
         setGreetingLoaded(true)
-        if (voiceRef.current) setTimeout(() => speak(greet), 500)
+        if (voiceRef.current) setTimeout(() => speak(greet), 600)
       } catch {
         const fallback = { role: 'assistant', content: 'NOVA online. What do you need, Mr. V?', timestamp: new Date(), toolEvents: [] }
         setMessages([fallback])
@@ -331,7 +357,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         setGreetingLoaded(true)
       }
     }
-    loadGreeting()
+    init()
 
     // Start wake word listener
     if (sttSupported) {
@@ -420,7 +446,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       const res = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, history: history.slice(0, -1) }),
+        body: JSON.stringify({ message: msg, history: history.slice(0, -1), session_id: SESSION_ID }),
       })
 
       const reader = res.body.getReader()
@@ -507,7 +533,8 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
 
   const clearChat = () => {
     stopSpeaking()
-    const m = [{ role: 'assistant', content: 'Fresh slate. What do you need, Mr. V?', timestamp: new Date(), toolEvents: [] }]
+    // Clears the VIEW only — history stays in database, NOVA still remembers
+    const m = [{ role: 'assistant', content: 'Fresh window, Mr. V. Memory\'s intact — I still know everything.', timestamp: new Date(), toolEvents: [] }]
     setMessages(m); messagesRef.current = m; setStreamingContent('')
   }
 
@@ -548,6 +575,15 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
             </button>
           )}
           <div className="h-4 w-px bg-aira-border" />
+          <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Memory active — NOVA remembers across sessions">
+            <Brain className="w-3 h-3 text-aira-blue/50" />
+            <span>MEM</span>
+          </div>
+          <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Screen awareness active — say 'what's on my screen?'">
+            <Monitor className="w-3 h-3 text-aira-blue/50" />
+            <span>SCREEN</span>
+          </div>
+          <div className="h-4 w-px bg-aira-border" />
           <button onClick={clearChat} className="flex items-center gap-1.5 text-xs text-aira-text-dim hover:text-aira-blue transition-colors">
             <RotateCcw className="w-3.5 h-3.5" /><span>New Chat</span>
           </button>
@@ -556,9 +592,26 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
-        {messages.map((msg, i) => (
-          <Message key={i} message={msg} onCopy={handleCopy} onSpeak={speak} />
-        ))}
+        {messages.map((msg, i) => {
+          // Show divider before the first non-history message
+          const prevWasHistory = i > 0 && messages[i - 1]?.fromHistory
+          const thisIsNew = !msg.fromHistory
+          const showDivider = prevWasHistory && thisIsNew
+          return (
+            <React.Fragment key={i}>
+              {showDivider && (
+                <div className="flex items-center gap-3 py-1">
+                  <div className="flex-1 h-px bg-aira-border" />
+                  <span className="text-xs font-mono text-aira-text-dim/40 flex items-center gap-1">
+                    <Brain className="w-3 h-3" /> previous session
+                  </span>
+                  <div className="flex-1 h-px bg-aira-border" />
+                </div>
+              )}
+              <Message message={msg} onCopy={handleCopy} onSpeak={speak} />
+            </React.Fragment>
+          )
+        })}
 
         {/* Streaming tool events */}
         {streamingTools.length > 0 && (
