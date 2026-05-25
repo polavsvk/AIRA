@@ -423,6 +423,8 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
   const messagesRef = useRef([])
+  const scrollContainerRef = useRef(null)
+  const userAtBottomRef = useRef(true)
 
   useEffect(() => { loadingRef.current = loading }, [loading])
   useEffect(() => { listeningRef.current = listening }, [listening])
@@ -592,7 +594,26 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     }
   }, [pendingMessage, greetingLoaded])
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, streamingContent, loading])
+  // ── Smart scroll — only auto-scroll if user is already near the bottom ─────
+  const handleScroll = useCallback(() => {
+    const c = scrollContainerRef.current
+    if (!c) return
+    userAtBottomRef.current = (c.scrollHeight - c.scrollTop - c.clientHeight) < 80
+  }, [])
+
+  // Scroll on new message (smooth, only if at bottom)
+  useEffect(() => {
+    if (userAtBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }
+  }, [messages.length])
+
+  // Scroll during streaming (instant, only if at bottom — avoids animation thrash)
+  useEffect(() => {
+    if (userAtBottomRef.current && (streamingContent || streamingTools.length > 0)) {
+      bottomRef.current?.scrollIntoView({ block: 'end' })
+    }
+  }, [streamingContent, streamingTools.length])
 
   const handleCopy = (text) => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }
 
@@ -716,11 +737,13 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
               setStreamingTools([...currentToolEvents])
 
             } else if (ev.type === 'done') {
+              // Strip delegation events — they're streaming-only, not message metadata
+              const persistedEvents = currentToolEvents.filter(e => e.type !== 'delegation')
               const aiMsg = {
                 role: 'assistant',
                 content: fullContent,
                 timestamp: new Date(),
-                toolEvents: [...currentToolEvents],
+                toolEvents: persistedEvents,
                 agent: ev.agent || currentAgent,
                 onConfirm: handleConfirm,
                 onDeny: handleDeny,
@@ -838,7 +861,11 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0"
+      >
         {messages.map((msg, i) => {
           const prevWasHistory = i > 0 && messages[i - 1]?.fromHistory
           const thisIsNew = !msg.fromHistory
