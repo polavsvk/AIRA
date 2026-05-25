@@ -4,8 +4,10 @@
 # ║  Runs NOVA in your browser at localhost:5173     ║
 # ╚══════════════════════════════════════════════════╝
 
-set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$SCRIPT_DIR/backend"
+FRONTEND_DIR="$SCRIPT_DIR/frontend"
+
 cd "$SCRIPT_DIR"
 
 echo ""
@@ -15,23 +17,23 @@ echo "╚═══════════════════════�
 echo ""
 
 # Check for .env
-if [ ! -f ".env" ]; then
+if [ ! -f "$SCRIPT_DIR/.env" ]; then
     echo "⚠️  No .env found. Creating from template..."
-    cp .env.example .env 2>/dev/null || touch .env
+    cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env" 2>/dev/null || touch "$SCRIPT_DIR/.env"
     echo "   → Add your GROQ_API_KEY to .env before continuing."
     echo ""
 fi
 
 # Python virtual environment
-if [ ! -d "backend/venv" ]; then
+if [ ! -d "$BACKEND_DIR/venv" ]; then
     echo "📦 Setting up Python environment (first time only)..."
-    python3 -m venv backend/venv
+    python3 -m venv "$BACKEND_DIR/venv"
 fi
-source backend/venv/bin/activate
+source "$BACKEND_DIR/venv/bin/activate"
 
 # Install Python dependencies
 echo "📦 Checking Python dependencies..."
-pip install -r backend/requirements.txt -q
+pip install -r "$BACKEND_DIR/requirements.txt" -q
 
 # Install Playwright if needed
 python3 -c "from playwright.async_api import async_playwright" 2>/dev/null || {
@@ -41,9 +43,9 @@ python3 -c "from playwright.async_api import async_playwright" 2>/dev/null || {
 }
 
 # Install Node dependencies
-if [ ! -d "frontend/node_modules" ]; then
+if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
     echo "📦 Installing frontend dependencies (first time only)..."
-    cd frontend && npm install --silent && cd ..
+    npm install --silent --prefix "$FRONTEND_DIR"
 fi
 
 # Kill anything already on these ports
@@ -53,9 +55,8 @@ sleep 0.5
 
 echo ""
 echo "🚀 Starting NOVA backend..."
-cd backend && uvicorn main:app --host 127.0.0.1 --port 8000 --reload &
+(cd "$BACKEND_DIR" && uvicorn main:app --host 127.0.0.1 --port 8000 --reload) &
 BACKEND_PID=$!
-cd ..
 
 # Wait for backend to be ready
 echo "⏳ Waiting for backend..."
@@ -65,9 +66,8 @@ for i in {1..30}; do
 done
 
 echo "🎨 Starting NOVA frontend..."
-cd frontend && npm run dev &
+(cd "$FRONTEND_DIR" && npm run dev) &
 FRONTEND_PID=$!
-cd ..
 
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
@@ -78,7 +78,7 @@ echo ""
 
 # Open in browser after 2 seconds
 sleep 2
-open "http://localhost:5173" 2>/dev/null || xdg-open "http://localhost:5173" 2>/dev/null || true
+open "http://localhost:5173" 2>/dev/null || true
 
 # Graceful shutdown
 cleanup() {
