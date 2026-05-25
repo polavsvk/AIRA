@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
+import NovaHUD from './NovaHUD'
 
 // ─── Session ID ───────────────────────────────────────────────────────────────
 
@@ -393,6 +394,18 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [interviewMode, setInterviewMode] = useState(false)
   const [interviewReason, setInterviewReason] = useState('')
 
+  // HUD visibility — Phase 2 arc-reactor command center
+  const [showHUD, setShowHUD] = useState(() => {
+    try { return localStorage.getItem('nova_hud_hidden') !== '1' } catch { return true }
+  })
+  const toggleHUD = () => {
+    setShowHUD(v => {
+      const next = !v
+      try { localStorage.setItem('nova_hud_hidden', next ? '0' : '1') } catch {}
+      return next
+    })
+  }
+
   // Refs
   const loadingRef = useRef(false)
   const voiceRef = useRef(true)
@@ -720,11 +733,53 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const isPaused = voiceState === 'paused'
   const isError = voiceState === 'error'
 
+  // Effective state for HUD — overlay 'processing' when LLM is thinking
+  const hudVoiceState =
+    interviewMode ? 'interview_mode' :
+    speaking ? 'speaking' :
+    loading ? 'processing' :
+    voiceState
+
+  // Track the active agent for the HUD's centre ring
+  const lastAgent = (() => {
+    // While streaming, use streamingAgent; otherwise the last assistant message's agent
+    if (streamingAgent && (loading || streamingContent)) return streamingAgent
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant' && messages[i].agent) return messages[i].agent
+    }
+    return 'NOVA'
+  })()
+
+  // Audio cues — fire on processing start and on done (via voice IPC chime)
+  const prevLoadingRef = useRef(false)
+  useEffect(() => {
+    if (!IS_ELECTRON || interviewMode || !voiceEnabled) return
+    // loading rising edge → soft "Tink" — processing started
+    if (loading && !prevLoadingRef.current) {
+      window.nova?.voice?.chime?.('Tink')
+    }
+    prevLoadingRef.current = loading
+  }, [loading, interviewMode, voiceEnabled])
+
   return (
     <div className="flex flex-col h-full min-h-0">
 
       {/* Voice install warning */}
       {IS_ELECTRON && !voiceInstalled && <VoiceInstallBanner />}
+
+      {/* Phase 2 — Arc Reactor HUD command center */}
+      {showHUD && (
+        <NovaHUD
+          voiceState={hudVoiceState}
+          activeAgent={lastAgent}
+          speaking={speaking}
+          wakeFlash={wakeFlash}
+          interviewMode={interviewMode}
+          voiceEnabled={voiceEnabled}
+          liveCommand={liveCommand}
+          size={170}
+        />
+      )}
 
       {/* Interview Mode banner */}
       {IS_ELECTRON && interviewMode && (
@@ -818,6 +873,13 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Screen awareness active">
             <Monitor className="w-3 h-3 text-aira-blue/50" /><span>SCREEN</span>
           </div>
+          <div className="h-4 w-px bg-aira-border" />
+          <button onClick={toggleHUD}
+            className={`flex items-center gap-1 text-xs transition-colors ${showHUD ? 'text-aira-blue' : 'text-aira-text-dim/70 hover:text-aira-blue'}`}
+            title="Toggle HUD command center">
+            <Activity className="w-3.5 h-3.5" />
+            <span className="font-mono">HUD</span>
+          </button>
           <div className="h-4 w-px bg-aira-border" />
           <button onClick={clearChat} className="flex items-center gap-1.5 text-xs text-aira-text-dim hover:text-aira-blue transition-colors">
             <RotateCcw className="w-3.5 h-3.5" /><span>New Chat</span>

@@ -149,3 +149,102 @@
 .status-blink {
   animation: statusBlink 2s ease-in-out infinite;
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   ARC REACTOR — Phase 2 HUD animations
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* Rotating rings */
+@keyframes reactorRotate {
+  from { transform: rotate(0deg); transform-origin: center; }
+  to   { transform: rotate(360deg); transform-origin: center; }
+}
+
+@keyframes reactorRotateReverse {
+  from { transform: rotate(360deg); transform-origin: center; }
+  to   { transform: rotate(0deg); transform-origin: center; }
+}
+
+.reactor-rotate {
+  animation: reactorRotate 20s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.reactor-rotate-reverse {
+  animation: reactorRotateReverse 12s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Core pulsing — "alive" heartbeat */
+@keyframes reactorCorePulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); transform-origin: center; }
+  50%      { opacity: 1.0; transform: scale(1.08); transform-origin: center; }
+}
+
+.reactor-core-pulse {
+  animation: reactorCorePulse 2.5s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Outer halo — broader breathing glow */
+@keyframes reactorHalo {
+  0%, 100% { opacity: 0.5; transform: scale(0.97); transform-origin: center; }
+  50%      { opacity: 0.9; transform: scale(1.03); transform-origin: center; }
+}
+
+.reactor-halo {
+  animation: reactorHalo 3s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Active agent dot pulse */
+@keyframes reactorAgentPulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1.0; }
+}
+
+.reactor-agent-pulse {
+  animation: reactorAgentPulse 0.8s ease-in-out infinite;
+}
+
+/* Ambient hex grid backdrop */
+.hud-grid-bg {
+  background-image:
+    linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Faint scan-line sweep across HUD area */
+@keyframes hudScanSweep {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  10%  { opacity: 0.4; }
+  90%  { opacity: 0.4; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+
+.hud-scan-sweep::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.4), transparent);
+  pointer-events: none;
+  animation: hudScanSweep 8s linear infinite;
+}
+
+/* HUD readout flicker — subtle, occasional */
+@keyframes hudFlicker {
+  0%, 100% { opacity: 1; }
+  50.5%    { opacity: 0.85; }
+}
+
+.hud-flicker {
+  animation: hudFlicker 6s ease-in-out infinite;
+}
