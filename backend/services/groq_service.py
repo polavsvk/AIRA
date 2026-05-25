@@ -4,9 +4,11 @@ LLM integration with full function calling, memory injection, and screen awarene
 """
 
 import os
+import re
 import json
 import asyncio
 from groq import Groq
+from groq import BadRequestError as GroqBadRequestError
 from typing import List, AsyncGenerator
 from dotenv import load_dotenv
 from datetime import datetime
@@ -169,52 +171,85 @@ async def get_chat_response_stream_with_tools(
                 max_tokens=2048,
                 stream=False,
             )
+        except GroqBadRequestError as e:
+            # ── tool_use_failed: LLaMA generated a malformed tool call ────────
+            # Access e.body directly — much more reliable than parsing str(e)
+            body        = getattr(e, "body", {}) or {}
+            error_info  = body.get("error", {}) if isinstance(body, dict) else {}
+            failed_gen  = error_info.get("failed_generation", "")
+
+            if error_info.get("code") == "tool_use_failed" and failed_gen:
+                # Parse:  <function=tool_name{"arg": "val"}</function>
+                fn_match = re.search(
+                    r"<function=(\w+)(\{.*?\})</function>",
+                    failed_gen,
+                    re.DOTALL,
+                )
+                if fn_match:
+                    tool_name = fn_match.group(1)
+                    try:
+                        args = json.loads(fn_match.group(2))
+                    except Exception:
+                        args = {}
+
+                    yield {"type": "tool_call", "tool": tool_name, "args": args}
+
+                    if tool_name == "screen_read":
+                        try:
+                            result_text = await analyze_screen(client, args.get("question"))
+                            result = {"success": True, "result": result_text}
+                        except Exception as se:
+                            result = {"success": False, "result": str(se)}
+                    else:
+                        result = await execute_tool(tool_name, args)
+
+                    result_str = result.get("result", "Done")
+                    yield {
+                        "type": "tool_result",
+                        "tool": tool_name,
+                        "result": result_str,
+                        "success": result.get("success", True),
+                    }
+
+                    # Feed result back so model can reply naturally
+                    messages.append({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "recovered_call",
+                            "type": "function",
+                            "function": {"name": tool_name, "arguments": json.dumps(args)},
+                        }],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": "recovered_call",
+                        "content": result_str,
+                    })
+                    continue  # Next round — model replies to the tool result
+
+            # tool_use_failed but couldn't parse → retry without tools
+            try:
+                fallback = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages,
+                    tool_choice="none",
+                    temperature=0.7,
+                    max_tokens=1024,
+                    stream=False,
+                )
+                text = fallback.choices[0].message.content or "I hit a formatting issue, Mr. V. Try rephrasing."
+                for word in text.split(" "):
+                    yield {"type": "token", "content": word + " "}
+                    await asyncio.sleep(0.008)
+                yield {"type": "done", "full_content": text}
+            except Exception:
+                yield {"type": "token", "content": "Tool call failed, Mr. V. Try rephrasing."}
+                yield {"type": "done", "full_content": ""}
+            return
+
         except Exception as e:
-            error_str = str(e)
-
-            # ── Handle Groq tool_use_failed ──────────────────────────────────
-            # LLaMA sometimes generates malformed tool calls like:
-            # <function=youtube_search{"query": "...", "play_best": true}</function>
-            # We parse and execute it ourselves instead of crashing.
-            if "tool_use_failed" in error_str and "failed_generation" in error_str:
-                try:
-                    import re as _re
-                    fg_match = _re.search(r"failed_generation.*?'(.+?)'[,}]", error_str, _re.DOTALL)
-                    if not fg_match:
-                        fg_match = _re.search(r'"failed_generation":\s*"(.+?)"', error_str, _re.DOTALL)
-                    if fg_match:
-                        failed_gen = fg_match.group(1).replace("\\'", "'")
-                        fn_match = _re.search(r'<function=(\w+)(\{.*?\})</function>', failed_gen, _re.DOTALL)
-                        if fn_match:
-                            tool_name = fn_match.group(1)
-                            args = json.loads(fn_match.group(2))
-                            yield {"type": "tool_call", "tool": tool_name, "args": args}
-
-                            if tool_name == "screen_read":
-                                try:
-                                    result_text = await analyze_screen(client, args.get("question"))
-                                    result = {"success": True, "result": result_text}
-                                except Exception as se:
-                                    result = {"success": False, "result": str(se)}
-                            else:
-                                result = await execute_tool(tool_name, args)
-
-                            result_str = result.get("result", "Done")
-                            yield {"type": "tool_result", "tool": tool_name,
-                                   "result": result_str, "success": result.get("success", True)}
-
-                            # Get a follow-up response without tools
-                            messages.append({"role": "assistant", "content": "",
-                                             "tool_calls": [{"id": "recovered", "type": "function",
-                                                             "function": {"name": tool_name,
-                                                                          "arguments": json.dumps(args)}}]})
-                            messages.append({"role": "tool", "tool_call_id": "recovered",
-                                             "content": result_str})
-                            continue  # Let the model respond to the tool result
-                except Exception:
-                    pass  # Fall through to generic error
-
-            yield {"type": "token", "content": f"Hit a snag, Mr. V — {error_str[:120]}"}
+            yield {"type": "token", "content": f"Error: {str(e)[:120]}"}
             yield {"type": "done", "full_content": ""}
             return
 
