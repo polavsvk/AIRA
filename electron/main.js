@@ -1,55 +1,78 @@
+/**
+ * NOVA — Electron Main Process
+ * ─────────────────────────────
+ * Runs the local voice pipeline (whisper.cpp + macOS say), the backend,
+ * Interview Mode safeguards, auto-start, and the tray UI.
+ */
+
 const {
   app, BrowserWindow, Tray, Menu, nativeImage,
-  shell, globalShortcut, ipcMain, session
+  shell, globalShortcut, ipcMain, session, dialog,
 } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
+
+const { WakeEngine, STATE: VOICE_STATE } = require('./voice/wake-engine')
+const { TTS } = require('./voice/tts')
+const { InterviewMode } = require('./voice/interview-mode')
 
 let mainWindow = null
 let tray = null
 let backendProcess = null
 let isQuitting = false
 
+let wakeEngine = null
+let tts = null
+let interviewMode = null
+let voiceEnabled = true
+
 const BACKEND_PORT = 8000
 const DEV_FRONTEND_URL = `http://localhost:5173`
 const PROD_FRONTEND_URL = `http://localhost:${BACKEND_PORT}`
 const isDev = process.env.NODE_ENV === 'development'
 
-// ─── Microphone & Permissions ─────────────────────────────────────────────────
-// Grant mic + speech API access — NOVA needs these to function
+// ── Auto-start on Mac login (only when packaged — dev runs are manual) ───────
+function configureAutoStart() {
+  if (app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      openAsHidden: true,   // Start in tray, no window — JARVIS-style
+    })
+  }
+}
+
+// ── Microphone & Permissions ─────────────────────────────────────────────────
 function setupPermissions() {
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    const allowed = ['media', 'microphone', 'audioCapture', 'speechRecognition']
+    const allowed = ['media', 'microphone', 'audioCapture', 'speechRecognition', 'notifications']
     callback(allowed.includes(permission))
   })
 
   session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
-    const allowed = ['media', 'microphone', 'audioCapture', 'speechRecognition']
+    const allowed = ['media', 'microphone', 'audioCapture', 'speechRecognition', 'notifications']
     return allowed.includes(permission)
   })
 }
 
-// ─── Backend ──────────────────────────────────────────────────────────────────
+// ── Backend ──────────────────────────────────────────────────────────────────
 function startBackend() {
   const backendPath = isDev
     ? path.join(__dirname, '../backend')
     : path.join(process.resourcesPath, 'backend')
 
-  // Use the venv Python — not system Python
   const pythonPath = path.join(backendPath, 'venv', 'bin', 'python3')
 
   console.log('[NOVA] Starting backend:', backendPath)
-  console.log('[NOVA] Python:', pythonPath)
 
   backendProcess = spawn(pythonPath, [
     '-m', 'uvicorn', 'main:app',
     '--host', '127.0.0.1',
-    '--port', String(BACKEND_PORT)
+    '--port', String(BACKEND_PORT),
   ], {
     cwd: backendPath,
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
-    detached: false
+    detached: false,
   })
 
   backendProcess.stdout?.on('data', d => process.stdout.write('[Backend] ' + d))
@@ -85,7 +108,92 @@ function waitForBackend(maxMs = 20000) {
   })
 }
 
-// ─── Window ───────────────────────────────────────────────────────────────────
+// ── Voice Pipeline ───────────────────────────────────────────────────────────
+function initVoicePipeline() {
+  wakeEngine = new WakeEngine()
+  tts = new TTS()
+  interviewMode = new InterviewMode()
+
+  // ── Wake engine events ──────────────────────────────────────────────────────
+  wakeEngine.on('state', state => {
+    mainWindow?.webContents.send('voice:state', state)
+    updateTrayIcon()
+  })
+
+  wakeEngine.on('wake', ({ residualCommand }) => {
+    console.log('[NOVA] Wake detected. Residual:', residualCommand || '(none)')
+    tts.chime('Glass')   // Instant audio confirmation, doesn't block mic
+    mainWindow?.webContents.send('voice:wake', { residualCommand })
+  })
+
+  wakeEngine.on('command', (text) => {
+    console.log('[NOVA] Command:', text)
+    mainWindow?.webContents.send('voice:command', text)
+  })
+
+  wakeEngine.on('command-empty', () => {
+    mainWindow?.webContents.send('voice:command-empty')
+  })
+
+  wakeEngine.on('error', err => {
+    console.error('[NOVA] Voice engine error:', err)
+    mainWindow?.webContents.send('voice:error', err)
+  })
+
+  // ── TTS events ──────────────────────────────────────────────────────────────
+  tts.on('start', text => {
+    // Pause listening while speaking — prevents NOVA from hearing herself
+    wakeEngine.pause()
+    mainWindow?.webContents.send('voice:speaking', text)
+  })
+
+  tts.on('end', () => {
+    mainWindow?.webContents.send('voice:speak-end')
+    // Resume listening after a small gap to clear audio
+    setTimeout(() => {
+      if (voiceEnabled && !interviewMode.active) {
+        wakeEngine.resume()
+      }
+    }, 400)
+  })
+
+  // ── Interview Mode events ───────────────────────────────────────────────────
+  interviewMode.on('change', (active, reason) => {
+    console.log(`[NOVA] Interview Mode: ${active ? 'ON' : 'OFF'} (${reason})`)
+    mainWindow?.webContents.send('voice:interview-mode', { active, reason })
+    updateTrayIcon()
+
+    if (active) {
+      // Hard stop: kill mic stream, kill TTS
+      wakeEngine.pause()
+      tts.stop()
+    } else if (voiceEnabled) {
+      wakeEngine.resume()
+    }
+  })
+
+  // ── Start everything ────────────────────────────────────────────────────────
+  interviewMode.start(3000)
+
+  // Slight delay before starting wake engine to let UI mount
+  setTimeout(() => {
+    if (voiceEnabled && !interviewMode.active) {
+      const result = wakeEngine.start()
+      if (!result.ok) {
+        // Show user a clear message about the install
+        mainWindow?.webContents.send('voice:not-installed', result.message)
+      }
+    }
+  }, 2500)
+}
+
+function stopVoicePipeline() {
+  wakeEngine?.stop()
+  tts?.stop()
+  interviewMode?.stop()
+}
+
+// ── Window ───────────────────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1300,
@@ -101,8 +209,6 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      // Enable Web Speech API
-      experimentalFeatures: true,
     },
     show: false,
   })
@@ -112,11 +218,12 @@ function createWindow() {
   mainWindow.loadURL(url)
 
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show()
-    mainWindow.focus()
+    if (!app.getLoginItemSettings().wasOpenedAsHidden) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
   })
 
-  // Hide to tray on close — don't quit
   mainWindow.on('close', e => {
     if (!isQuitting) {
       e.preventDefault()
@@ -132,7 +239,6 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  // Dev tools in dev mode
   if (isDev) {
     mainWindow.webContents.on('before-input-event', (_, input) => {
       if (input.key === 'F12') mainWindow.webContents.openDevTools()
@@ -157,13 +263,55 @@ function toggleWindow() {
   }
 }
 
-// ─── Tray ─────────────────────────────────────────────────────────────────────
+// ── Tray ─────────────────────────────────────────────────────────────────────
+function updateTrayIcon() {
+  if (!tray) return
+  const inInterview = interviewMode?.active
+  const voiceState = wakeEngine?.state
+  const speaking = tts?.isSpeaking()
+
+  let label = 'NOVA'
+  if (inInterview) label = 'NOVA · 🔇 Interview Mode'
+  else if (speaking) label = 'NOVA · Speaking'
+  else if (voiceState === VOICE_STATE.LISTENING_COMMAND) label = 'NOVA · Listening'
+  else if (voiceState === VOICE_STATE.LISTENING_WAKE) label = 'NOVA · Standby'
+  else if (voiceState === VOICE_STATE.PAUSED) label = 'NOVA · Paused'
+  else if (voiceState === VOICE_STATE.ERROR) label = 'NOVA · Voice unavailable'
+
+  tray.setToolTip(label)
+  rebuildTrayMenu()
+}
+
+function rebuildTrayMenu() {
+  if (!tray) return
+  const inInterview = interviewMode?.active
+  const voiceOn = voiceEnabled
+
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open NOVA', click: showWindow },
+    { type: 'separator' },
+    {
+      label: inInterview ? '🔇 Interview Mode: ON (Cmd+Shift+M)' : '🎙  Interview Mode: OFF (Cmd+Shift+M)',
+      click: () => interviewMode?.toggleManual(),
+    },
+    {
+      label: voiceOn ? '🎤 Voice: ON' : '🚫 Voice: OFF',
+      click: () => toggleVoice(),
+    },
+    { type: 'separator' },
+    { label: 'Show in Dock', click: () => { app.dock?.show(); showWindow() } },
+    { type: 'separator' },
+    { label: 'Quit NOVA', click: () => { isQuitting = true; stopVoicePipeline(); stopBackend(); app.quit() } },
+  ]))
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, 'assets', 'tray-icon.png')
   let icon
   try {
     icon = nativeImage.createFromPath(iconPath)
-    icon.setTemplateImage(true)
+    if (icon.isEmpty()) icon = nativeImage.createEmpty()
+    else icon.setTemplateImage(true)
   } catch {
     icon = nativeImage.createEmpty()
   }
@@ -171,37 +319,44 @@ function createTray() {
   tray = new Tray(icon)
   tray.setToolTip('NOVA — AI Personal Assistant')
 
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open NOVA', click: showWindow },
-    { type: 'separator' },
-    { label: 'Show in Dock', click: () => { app.dock?.show(); showWindow() } },
-    { type: 'separator' },
-    { label: 'Quit NOVA', click: () => { isQuitting = true; stopBackend(); app.quit() } }
-  ]))
-
   tray.on('click', toggleWindow)
   tray.on('double-click', showWindow)
+
+  rebuildTrayMenu()
 }
 
-// ─── Lifecycle ────────────────────────────────────────────────────────────────
+// ── Voice control helpers ────────────────────────────────────────────────────
+function toggleVoice() {
+  voiceEnabled = !voiceEnabled
+  if (voiceEnabled) {
+    if (!interviewMode.active) wakeEngine.start()
+  } else {
+    wakeEngine.stop()
+    tts.stop()
+  }
+  mainWindow?.webContents.send('voice:enabled', voiceEnabled)
+  updateTrayIcon()
+}
+
+// ── Lifecycle ────────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
-  // Permissions first — before any window loads
   setupPermissions()
+  configureAutoStart()
 
-  // Start backend
   startBackend()
-
-  // Show tray immediately
   createTray()
 
-  // Wait for backend
   await waitForBackend(20000)
-
-  // Create window
   createWindow()
 
-  // Global shortcut — Cmd+Shift+Space to toggle
+  // Voice pipeline starts after window is ready
+  initVoicePipeline()
+
+  // Global shortcuts
   globalShortcut.register('CommandOrControl+Shift+Space', toggleWindow)
+  globalShortcut.register('CommandOrControl+Shift+M', () => {
+    interviewMode?.toggleManual()
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -210,7 +365,6 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', e => {
-  // macOS: stay alive in tray
   if (process.platform !== 'darwin') app.quit()
   else e.preventDefault()
 })
@@ -218,15 +372,42 @@ app.on('window-all-closed', e => {
 app.on('before-quit', () => {
   isQuitting = true
   globalShortcut.unregisterAll()
+  stopVoicePipeline()
   stopBackend()
 })
 
-// Auto-start on login when packaged
-if (app.isPackaged) {
-  app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true })
-}
-
-// ─── IPC ──────────────────────────────────────────────────────────────────────
+// ── IPC handlers ─────────────────────────────────────────────────────────────
 ipcMain.handle('get-app-version', () => app.getVersion())
 ipcMain.handle('hide-window', () => { mainWindow?.hide(); app.dock?.hide() })
-ipcMain.handle('quit-app', () => { isQuitting = true; stopBackend(); app.quit() })
+ipcMain.handle('quit-app', () => { isQuitting = true; stopVoicePipeline(); stopBackend(); app.quit() })
+
+// Voice control IPC
+ipcMain.handle('voice:status', () => ({
+  enabled: voiceEnabled,
+  state: wakeEngine?.state || 'idle',
+  installed: wakeEngine?.isInstalled() || false,
+  installStatus: wakeEngine?.getInstallStatus(),
+  speaking: tts?.isSpeaking() || false,
+  interviewMode: interviewMode?.getStatus(),
+}))
+
+ipcMain.handle('voice:enable', () => { if (!voiceEnabled) toggleVoice(); return voiceEnabled })
+ipcMain.handle('voice:disable', () => { if (voiceEnabled) toggleVoice(); return voiceEnabled })
+ipcMain.handle('voice:toggle', () => { toggleVoice(); return voiceEnabled })
+
+ipcMain.handle('voice:speak', async (e, text, opts) => {
+  if (!text || interviewMode.active) return { ok: false, reason: 'interview mode' }
+  await tts.speak(text, opts || {})
+  return { ok: true }
+})
+
+ipcMain.handle('voice:stop-speaking', () => { tts?.stop() })
+
+ipcMain.handle('voice:chime', (e, name) => { tts?.chime(name || 'Glass') })
+
+ipcMain.handle('voice:interview-toggle', () => {
+  interviewMode.toggleManual()
+  return interviewMode.getStatus()
+})
+
+ipcMain.handle('voice:interview-status', () => interviewMode?.getStatus())

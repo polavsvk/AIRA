@@ -4,7 +4,7 @@ import {
   Volume2, VolumeX, Radio, Globe, FileText,
   CheckCircle, XCircle, Loader, AlertTriangle,
   Brain, Monitor, Users, ChevronDown, ChevronUp,
-  Activity,
+  Activity, Phone, ShieldAlert,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
@@ -41,9 +41,7 @@ function setCachedGreeting(greeting) {
   } catch {}
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const WAKE_WORDS = ['hey nova', 'hey nora', 'nova', 'okay nova', 'ok nova']
+// ─── Quick Prompts ────────────────────────────────────────────────────────────
 
 const QUICK_PROMPTS = [
   'How many agents are working for me?',
@@ -79,51 +77,25 @@ function getAgentStyle(agentName) {
   return AGENT_COLORS[agentName] || AGENT_COLORS.NOVA
 }
 
-// ─── Voice — JARVIS-style female ─────────────────────────────────────────────
-
-function getBestFemaleVoice() {
-  const voices = window.speechSynthesis?.getVoices() || []
-
-  // Priority 1: Samantha Enhanced — macOS premium neural, crisp & professional
-  const samanthaEnhanced = voices.find(v =>
-    v.name.toLowerCase().includes('samantha') &&
-    (v.name.includes('Enhanced') || v.name.includes('Premium') || v.name.includes('Neural'))
-  )
-  if (samanthaEnhanced) return samanthaEnhanced
-
-  // Priority 2: Any Samantha (still excellent on macOS)
-  const samantha = voices.find(v => v.name.includes('Samantha') && v.lang.startsWith('en'))
-  if (samantha) return samantha
-
-  // Priority 3: Other neural/enhanced English female voices
-  const MALE_NAMES = ['albert', 'fred', 'ralph', 'bruce', 'daniel', 'james', 'oliver', 'george', 'tom', 'alex']
-  const enhanced = voices.find(v =>
-    v.lang.startsWith('en') &&
-    (v.name.includes('Enhanced') || v.name.includes('Neural') || v.name.includes('Premium')) &&
-    !MALE_NAMES.some(n => v.name.toLowerCase().includes(n))
-  )
-  if (enhanced) return enhanced
-
-  // Priority 4: Named professional female voices
-  for (const n of ['Ava', 'Allison', 'Victoria', 'Karen', 'Moira', 'Tessa', 'Fiona', 'Susan',
-    'Google UK English Female', 'Microsoft Zira', 'Microsoft Hazel', 'Microsoft Susan']) {
-    const v = voices.find(v => v.name.includes(n) && v.lang.startsWith('en'))
-    if (v) return v
-  }
-
-  return voices.find(v => v.lang.startsWith('en')) || voices[0] || null
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function stripMarkdown(text) {
+function stripForSpeech(text) {
   return text
-    .replace(/#{1,6}\s+/g, '').replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1').replace(/`{1,3}[^`]*`{1,3}/g, '')
-    .replace(/\[(.+?)\]\(.+?\)/g, '$1').replace(/^[-*+]\s+/gm, '')
-    .replace(/^\d+\.\s+/gm, '').replace(/^>\s+/gm, '')
-    .replace(/\n{2,}/g, '. ').replace(/\n/g, ' ').trim()
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/^[-*+]\s+/gm, '')
+    .replace(/^\d+\.\s+/gm, '')
+    .replace(/\n+/g, '. ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
+
+const IS_ELECTRON = typeof window !== 'undefined' && window.nova?.isElectron
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -234,7 +206,6 @@ function Message({ message, onCopy, onSpeak }) {
 
   return (
     <div className={`flex items-start gap-3 message-enter ${isUser ? 'flex-row-reverse' : ''}`}>
-      {/* Avatar */}
       <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
         isUser
           ? 'bg-aira-gold/10 border border-aira-gold/30'
@@ -247,14 +218,10 @@ function Message({ message, onCopy, onSpeak }) {
       </div>
 
       <div className={`group relative max-w-[82%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
-        {/* Agent badge — show for non-NOVA agents */}
         {!isUser && agentName && agentName !== 'NOVA' && (
-          <div className="mb-1">
-            <AgentBadge agentName={agentName} />
-          </div>
+          <div className="mb-1"><AgentBadge agentName={agentName} /></div>
         )}
 
-        {/* Message bubble */}
         <div className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
           isUser
             ? 'bg-aira-blue/10 border border-aira-blue/20 text-aira-text'
@@ -268,7 +235,6 @@ function Message({ message, onCopy, onSpeak }) {
           }
         </div>
 
-        {/* Tool events */}
         {message.toolEvents?.map((ev, i) => (
           ev.type === 'confirmation_needed'
             ? <ConfirmationCard key={i} confirmationId={ev.confirmation_id} tool={ev.tool} data={ev.data}
@@ -277,7 +243,6 @@ function Message({ message, onCopy, onSpeak }) {
                 success={ev.success !== false} pending={ev.pending} />
         ))}
 
-        {/* Actions */}
         <div className={`flex items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity ${isUser ? 'flex-row-reverse' : ''}`}>
           <span className="text-xs text-aira-text-dim">
             {message.timestamp?.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
@@ -307,7 +272,7 @@ function AgentStatusPanel({ onClose }) {
       try {
         const res = await axios.get('/api/agents/status')
         setStatus(res.data)
-      } catch { /* silently fail */ }
+      } catch {}
       finally { setLoading(false) }
     }
     fetchStatus()
@@ -334,7 +299,6 @@ function AgentStatusPanel({ onClose }) {
 
         {status && !loading && (
           <>
-            {/* Permanent agents */}
             <p className="text-[10px] font-mono text-aira-text-dim/60 tracking-widest mb-2">PERMANENT</p>
             <div className="space-y-1 mb-3">
               {Object.entries(status.permanent || {}).map(([name, info]) => {
@@ -355,7 +319,6 @@ function AgentStatusPanel({ onClose }) {
               })}
             </div>
 
-            {/* MARK agents */}
             {Object.keys(status.temporary || {}).length > 0 && (
               <>
                 <p className="text-[10px] font-mono text-aira-text-dim/60 tracking-widest mb-2">ACTIVE MARKS</p>
@@ -390,6 +353,23 @@ function AgentStatusPanel({ onClose }) {
   )
 }
 
+// ─── Voice Install Banner ─────────────────────────────────────────────────────
+
+function VoiceInstallBanner() {
+  return (
+    <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-4 py-2.5 flex items-center gap-3">
+      <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+      <div className="flex-1 text-xs">
+        <span className="text-yellow-400 font-mono font-semibold">VOICE PIPELINE NOT INSTALLED · </span>
+        <span className="text-aira-text-dim">Run this in your terminal once:</span>
+        <code className="block mt-1 px-2 py-1 bg-aira-darker rounded text-aira-blue font-mono text-[11px]">
+          bash electron/setup-voice.sh
+        </code>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
@@ -403,23 +383,19 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [greetingLoaded, setGreetingLoaded] = useState(false)
   const [showAgentPanel, setShowAgentPanel] = useState(false)
 
-  // Voice
+  // Voice state — driven entirely by Electron IPC
   const [voiceEnabled, setVoiceEnabled] = useState(true)
-  const [listening, setListening] = useState(false)
+  const [voiceState, setVoiceState] = useState('idle')         // from wake engine
   const [speaking, setSpeaking] = useState(false)
-  const [wakeReady, setWakeReady] = useState(false)
   const [wakeFlash, setWakeFlash] = useState(false)
-  const [transcript, setTranscript] = useState('')
+  const [liveCommand, setLiveCommand] = useState('')
+  const [voiceInstalled, setVoiceInstalled] = useState(true)
+  const [interviewMode, setInterviewMode] = useState(false)
+  const [interviewReason, setInterviewReason] = useState('')
 
-  const voiceSupported = 'speechSynthesis' in window
-  const sttSupported = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window
-
+  // Refs
   const loadingRef = useRef(false)
-  const listeningRef = useRef(false)
   const voiceRef = useRef(true)
-  const wakeRecRef = useRef(null)
-  const cmdRecRef = useRef(null)
-  const wakeTimerRef = useRef(null)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
   const messagesRef = useRef([])
@@ -427,124 +403,86 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const userAtBottomRef = useRef(true)
 
   useEffect(() => { loadingRef.current = loading }, [loading])
-  useEffect(() => { listeningRef.current = listening }, [listening])
   useEffect(() => { voiceRef.current = voiceEnabled }, [voiceEnabled])
   useEffect(() => { messagesRef.current = messages }, [messages])
 
-  // ── TTS — JARVIS-style female voice ──────────────────────────────────────────
-  const speak = useCallback((text, onDone) => {
-    if (!voiceSupported) { onDone?.(); return }
-    window.speechSynthesis.cancel()
-    const clean = stripMarkdown(text)
-    if (!clean) { onDone?.(); return }
-
-    const fire = () => {
-      const u = new SpeechSynthesisUtterance(clean)
-      u.voice = getBestFemaleVoice()
-      u.rate = 1.05    // Measured, confident — JARVIS pace (not rushed)
-      u.pitch = 0.95   // Slightly lower = more authoritative, less assistant-like
-      u.volume = 1.0
-      u.onstart = () => setSpeaking(true)
-      u.onend = () => { setSpeaking(false); onDone?.() }
-      u.onerror = () => { setSpeaking(false); onDone?.() }
-      window.speechSynthesis.speak(u)
+  // ── TTS — via Electron IPC (macOS Samantha) ─────────────────────────────────
+  const speak = useCallback(async (text) => {
+    if (!IS_ELECTRON || !voiceRef.current) return
+    const clean = stripForSpeech(text)
+    if (!clean) return
+    try {
+      await window.nova.voice.speak(clean)
+    } catch (e) {
+      console.error('[NOVA] speak failed:', e)
     }
-    if (window.speechSynthesis.getVoices().length) fire()
-    else { window.speechSynthesis.onvoiceschanged = () => fire() }
-  }, [voiceSupported])
-
-  const stopSpeaking = useCallback(() => { window.speechSynthesis.cancel(); setSpeaking(false) }, [])
-
-  // ── Wake Word ─────────────────────────────────────────────────────────────────
-  const scheduleWakeRestart = useCallback((delay = 200) => {
-    clearTimeout(wakeTimerRef.current)
-    wakeTimerRef.current = setTimeout(() => {
-      if (!listeningRef.current && !loadingRef.current) startWakeListen()
-    }, delay)
   }, [])
 
-  const stopWakeListen = useCallback(() => {
-    clearTimeout(wakeTimerRef.current)
-    try { wakeRecRef.current?.abort() } catch {}
-    wakeRecRef.current = null
-    setWakeReady(false)
+  const stopSpeaking = useCallback(() => {
+    if (IS_ELECTRON) window.nova.voice.stopSpeaking()
   }, [])
 
-  const startWakeListen = useCallback(() => {
-    if (!sttSupported || listeningRef.current) return
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    const rec = new SR()
-    wakeRecRef.current = rec
-    rec.continuous = false
-    rec.interimResults = false
-    rec.maxAlternatives = 6
-    rec.lang = 'en-US'
+  // ── Voice IPC subscriptions ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!IS_ELECTRON) return
 
-    rec.onstart = () => setWakeReady(true)
-    rec.onresult = (e) => {
-      const transcripts = []
-      for (let i = 0; i < e.results.length; i++)
-        for (let j = 0; j < e.results[i].length; j++)
-          transcripts.push(e.results[i][j].transcript.toLowerCase())
+    // Initial status check
+    window.nova.voice.getStatus().then(status => {
+      setVoiceEnabled(status.enabled)
+      setVoiceState(status.state || 'idle')
+      setVoiceInstalled(status.installed)
+      setSpeaking(status.speaking)
+      setInterviewMode(status.interviewMode?.active || false)
+      setInterviewReason(status.interviewMode?.reason || '')
+    }).catch(() => {})
 
-      const woken = transcripts.some(t => WAKE_WORDS.some(w => t.includes(w)))
-      if (woken && !listeningRef.current && !loadingRef.current) {
-        stopWakeListen()
+    const unsubs = [
+      window.nova.voice.onState(state => setVoiceState(state)),
+
+      window.nova.voice.onWake(({ residualCommand }) => {
         setWakeFlash(true)
-        setTimeout(() => setWakeFlash(false), 1000)
-        if (voiceRef.current) speak('Yes, Mr. V?', () => setTimeout(startCmdListen, 200))
-        else startCmdListen()
-      }
-    }
-    rec.onend = () => { setWakeReady(false); scheduleWakeRestart(200) }
-    rec.onerror = (e) => {
-      setWakeReady(false)
-      scheduleWakeRestart(e.error === 'no-speech' ? 100 : 600)
-    }
-    try { rec.start() } catch { scheduleWakeRestart(500) }
-  }, [sttSupported, speak, stopWakeListen, scheduleWakeRestart])
+        setLiveCommand(residualCommand || '')
+        setTimeout(() => setWakeFlash(false), 1500)
+      }),
 
-  // ── Command Listen ────────────────────────────────────────────────────────────
-  const startCmdListen = useCallback(() => {
-    if (!sttSupported) return
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    const rec = new SR()
-    cmdRecRef.current = rec
-    rec.continuous = false
-    rec.interimResults = true
-    rec.lang = 'en-US'
+      window.nova.voice.onCommand(text => {
+        setLiveCommand('')
+        if (text && text.length > 1) {
+          sendMessageRef.current?.(text)
+        }
+      }),
 
-    rec.onstart = () => setListening(true)
-    rec.onresult = (e) => {
-      const text = Array.from(e.results).map(r => r[0].transcript).join('')
-      setTranscript(text)
-      if (e.results[e.results.length - 1].isFinal) {
-        setInput(text)
-        setTranscript('')
-      }
-    }
-    rec.onend = () => { setListening(false); setTranscript(''); scheduleWakeRestart(300) }
-    rec.onerror = () => { setListening(false); setTranscript(''); scheduleWakeRestart(300) }
-    try { rec.start() } catch {}
-  }, [sttSupported, scheduleWakeRestart])
+      window.nova.voice.onCommandEmpty(() => setLiveCommand('')),
 
-  const stopCmdListen = useCallback(() => {
-    try { cmdRecRef.current?.stop() } catch {}
-    setListening(false); setTranscript('')
+      window.nova.voice.onSpeaking(() => setSpeaking(true)),
+      window.nova.voice.onSpeakEnd(() => setSpeaking(false)),
+
+      window.nova.voice.onInterviewMode(({ active, reason }) => {
+        setInterviewMode(active)
+        setInterviewReason(reason)
+      }),
+
+      window.nova.voice.onEnabledChanged(enabled => setVoiceEnabled(enabled)),
+
+      window.nova.voice.onNotInstalled(() => setVoiceInstalled(false)),
+
+      window.nova.voice.onError(err => console.error('[NOVA voice]', err)),
+    ]
+
+    return () => { unsubs.forEach(u => u && u()) }
   }, [])
 
-  // ── Init ──────────────────────────────────────────────────────────────────────
+  // sendMessage needs to be in a ref because the voice IPC handlers close over it
+  const sendMessageRef = useRef(null)
+
+  // ── Init ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
       try {
         const histRes = await axios.get('/api/memory/history?limit=40', { timeout: 6000 })
         const pastMessages = (histRes.data?.messages || []).map(m => ({
-          role: m.role,
-          content: m.content,
-          timestamp: new Date(),
-          toolEvents: [],
-          fromHistory: true,
-          agent: null,
+          role: m.role, content: m.content, timestamp: new Date(),
+          toolEvents: [], fromHistory: true, agent: null,
         }))
 
         let greet = getCachedGreeting()
@@ -562,7 +500,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         setMessages(allMsgs)
         messagesRef.current = allMsgs
         setGreetingLoaded(true)
-        if (voiceRef.current) setTimeout(() => speak(greet), 600)
+        if (IS_ELECTRON && voiceRef.current) setTimeout(() => speak(greet), 800)
       } catch {
         const fallback = {
           role: 'assistant', content: 'NOVA online. What do you need, Mr. V?',
@@ -574,17 +512,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       }
     }
     init()
-
-    if (sttSupported) {
-      const t = setTimeout(() => startWakeListen(), 1500)
-      return () => {
-        clearTimeout(t)
-        clearTimeout(wakeTimerRef.current)
-        stopWakeListen()
-        stopCmdListen()
-        stopSpeaking()
-      }
-    }
   }, [])
 
   useEffect(() => {
@@ -594,30 +521,32 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     }
   }, [pendingMessage, greetingLoaded])
 
-  // ── Smart scroll — only auto-scroll if user is already near the bottom ─────
+  // ── Smart scroll ────────────────────────────────────────────────────────────
   const handleScroll = useCallback(() => {
     const c = scrollContainerRef.current
     if (!c) return
     userAtBottomRef.current = (c.scrollHeight - c.scrollTop - c.clientHeight) < 80
   }, [])
 
-  // Scroll on new message (smooth, only if at bottom)
   useEffect(() => {
     if (userAtBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
   }, [messages.length])
 
-  // Scroll during streaming (instant, only if at bottom — avoids animation thrash)
   useEffect(() => {
     if (userAtBottomRef.current && (streamingContent || streamingTools.length > 0)) {
       bottomRef.current?.scrollIntoView({ block: 'end' })
     }
   }, [streamingContent, streamingTools.length])
 
-  const handleCopy = (text) => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+  const handleCopy = (text) => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
-  // ── Confirmation handlers ─────────────────────────────────────────────────────
+  // ── Confirmation handlers ───────────────────────────────────────────────────
   const handleConfirm = async (confirmationId) => {
     try {
       const res = await axios.post('/api/chat/confirm', { confirmation_id: confirmationId })
@@ -653,13 +582,13 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     })))
   }
 
-  // ── Send Message ──────────────────────────────────────────────────────────────
+  // ── Send Message ────────────────────────────────────────────────────────────
   const sendMessage = async (text = input) => {
     const msg = (typeof text === 'string' ? text : input).trim()
     if (!msg || loadingRef.current) return
 
-    stopSpeaking(); stopCmdListen(); stopWakeListen()
-    setInput(''); setTranscript('')
+    stopSpeaking()
+    setInput('')
 
     const userMsg = { role: 'user', content: msg, timestamp: new Date(), toolEvents: [], agent: null }
     const updated = [...messagesRef.current, userMsg]
@@ -694,27 +623,21 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
             if (ev.type === 'agent_started') {
               currentAgent = ev.agent
               setStreamingAgent(ev.agent)
-
             } else if (ev.type === 'agent_delegation') {
-              // Show a delegation badge in the stream area
               const delEv = { type: 'delegation', agent: ev.agent, message: ev.message }
               currentToolEvents.push(delEv)
               setStreamingTools([...currentToolEvents])
-
             } else if (ev.type === 'rate_limit') {
               const secs = ev.retry_after || 60
-              setTranscript(`⏳ Rate limited — resets in ~${secs}s`)
-              setTimeout(() => setTranscript(''), secs * 1000)
-
+              setLiveCommand(`⏳ Rate limited — resets in ~${secs}s`)
+              setTimeout(() => setLiveCommand(''), secs * 1000)
             } else if (ev.type === 'token') {
               fullContent += ev.content
               setStreamingContent(fullContent)
-
             } else if (ev.type === 'tool_call') {
               const toolEv = { type: 'tool_call', tool: ev.tool, args: ev.args, pending: true }
               currentToolEvents.push(toolEv)
               setStreamingTools([...currentToolEvents])
-
             } else if (ev.type === 'tool_result') {
               currentToolEvents = currentToolEvents.map(t =>
                 t.tool === ev.tool && t.pending
@@ -722,7 +645,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
                   : t
               )
               setStreamingTools([...currentToolEvents])
-
             } else if (ev.type === 'confirmation_needed') {
               const confEv = {
                 type: 'confirmation_needed',
@@ -735,9 +657,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
               )
               currentToolEvents.push(confEv)
               setStreamingTools([...currentToolEvents])
-
             } else if (ev.type === 'done') {
-              // Strip delegation events — they're streaming-only, not message metadata
               const persistedEvents = currentToolEvents.filter(e => e.type !== 'delegation')
               const aiMsg = {
                 role: 'assistant',
@@ -751,8 +671,9 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
               setMessages(prev => { messagesRef.current = [...prev, aiMsg]; return [...prev, aiMsg] })
               setStreamingContent('')
               setStreamingTools([])
-              if (voiceRef.current && fullContent) speak(fullContent, () => scheduleWakeRestart(300))
-              else scheduleWakeRestart(300)
+              if (IS_ELECTRON && voiceRef.current && fullContent && !interviewMode) {
+                speak(fullContent)
+              }
             }
           } catch {}
         }
@@ -764,21 +685,24 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       }
       setMessages(prev => { messagesRef.current = [...prev, errMsg]; return [...prev, errMsg] })
       setStreamingContent(''); setStreamingTools([])
-      scheduleWakeRestart(300)
     } finally {
       setLoading(false)
       inputRef.current?.focus()
     }
   }
 
-  const toggleMic = () => {
-    if (listening) { stopCmdListen(); scheduleWakeRestart(300) }
-    else { stopWakeListen(); startCmdListen() }
+  // Expose sendMessage to the voice IPC handlers
+  useEffect(() => { sendMessageRef.current = sendMessage })
+
+  // ── Voice controls ──────────────────────────────────────────────────────────
+  const toggleVoice = async () => {
+    if (!IS_ELECTRON) return
+    await window.nova.voice.toggle()
   }
 
-  const toggleVoice = () => {
-    const next = !voiceEnabled; setVoiceEnabled(next); voiceRef.current = next
-    if (!next) stopSpeaking()
+  const toggleInterview = async () => {
+    if (!IS_ELECTRON) return
+    await window.nova.voice.toggleInterview()
   }
 
   const clearChat = () => {
@@ -790,8 +714,28 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     setMessages(m); messagesRef.current = m; setStreamingContent('')
   }
 
+  // ── Voice status label ──────────────────────────────────────────────────────
+  const isListeningCommand = voiceState === 'listening_command'
+  const isListeningWake = voiceState === 'listening_wake'
+  const isPaused = voiceState === 'paused'
+  const isError = voiceState === 'error'
+
   return (
     <div className="flex flex-col h-full min-h-0">
+
+      {/* Voice install warning */}
+      {IS_ELECTRON && !voiceInstalled && <VoiceInstallBanner />}
+
+      {/* Interview Mode banner */}
+      {IS_ELECTRON && interviewMode && (
+        <div className="bg-red-500/10 border-b border-red-500/30 px-4 py-2 flex items-center justify-center gap-3">
+          <ShieldAlert className="w-4 h-4 text-red-400" />
+          <span className="text-xs font-mono text-red-400 tracking-widest font-semibold">
+            🔇 INTERVIEW MODE · Voice silenced · {interviewReason}
+          </span>
+          <span className="text-[10px] text-aira-text-dim font-mono">(Cmd+Shift+M to toggle)</span>
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-aira-border flex-shrink-0">
@@ -799,59 +743,80 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           <Zap className="w-4 h-4 text-aira-blue" />
           <span className="text-xs font-mono text-aira-text-dim tracking-widest">NOVA INTERFACE</span>
 
-          {speaking && (
-            <span className="flex items-center gap-1 text-xs text-aira-green font-mono animate-pulse">
-              <Volume2 className="w-3 h-3" />SPEAKING
-            </span>
+          {/* Live voice status */}
+          {IS_ELECTRON && voiceEnabled && !interviewMode && (
+            <>
+              {speaking && (
+                <span className="flex items-center gap-1 text-xs text-aira-green font-mono animate-pulse">
+                  <Volume2 className="w-3 h-3" />SPEAKING
+                </span>
+              )}
+              {!speaking && isListeningCommand && (
+                <span className="flex items-center gap-1 text-xs text-red-400 font-mono animate-pulse">
+                  <Mic className="w-3 h-3" />LISTENING
+                </span>
+              )}
+              {!speaking && !isListeningCommand && (
+                <span className={`flex items-center gap-1 text-xs font-mono transition-all ${
+                  wakeFlash ? 'text-aira-blue scale-105' :
+                  isError ? 'text-red-400' :
+                  isListeningWake ? 'text-aira-text-dim/60' :
+                  'text-aira-text-dim/30'
+                }`}>
+                  <Radio className="w-3 h-3" />
+                  {wakeFlash ? 'WAKE DETECTED' :
+                   isError ? 'VOICE ERROR' :
+                   isListeningWake ? 'STANDBY · "HEY NOVA"' :
+                   isPaused ? 'PAUSED' : '…'}
+                </span>
+              )}
+            </>
           )}
-          {listening && (
-            <span className="flex items-center gap-1 text-xs text-red-400 font-mono animate-pulse">
-              <Mic className="w-3 h-3" />LISTENING
-            </span>
-          )}
-          {!speaking && !listening && sttSupported && (
-            <span className={`flex items-center gap-1 text-xs font-mono transition-all ${
-              wakeFlash ? 'text-aira-blue scale-105' : wakeReady ? 'text-aira-text-dim/50' : 'text-aira-text-dim/20'
-            }`}>
-              <Radio className="w-3 h-3" />
-              {wakeFlash ? 'WAKE DETECTED' : wakeReady ? 'STANDBY · "HEY NOVA"' : '…'}
+
+          {IS_ELECTRON && !voiceEnabled && (
+            <span className="flex items-center gap-1 text-xs text-aira-text-dim/40 font-mono">
+              <MicOff className="w-3 h-3" />VOICE OFF
             </span>
           )}
         </div>
 
         <div className="flex items-center gap-3">
-          {voiceSupported && (
-            <button onClick={toggleVoice} className={`flex items-center gap-1 text-xs transition-colors ${voiceEnabled ? 'text-aira-blue' : 'text-aira-text-dim'}`}>
-              {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-              <span className="font-mono">{voiceEnabled ? 'VOICE ON' : 'VOICE OFF'}</span>
-            </button>
-          )}
-          <div className="h-4 w-px bg-aira-border" />
+          {IS_ELECTRON && (
+            <>
+              <button onClick={toggleVoice}
+                className={`flex items-center gap-1 text-xs transition-colors ${voiceEnabled ? 'text-aira-blue' : 'text-aira-text-dim'}`}>
+                {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                <span className="font-mono">{voiceEnabled ? 'VOICE ON' : 'VOICE OFF'}</span>
+              </button>
 
-          {/* Agent Fleet button */}
+              <div className="h-4 w-px bg-aira-border" />
+
+              <button onClick={toggleInterview} title="Cmd+Shift+M"
+                className={`flex items-center gap-1 text-xs transition-colors ${interviewMode ? 'text-red-400' : 'text-aira-text-dim/70 hover:text-red-400'}`}>
+                <Phone className="w-3.5 h-3.5" />
+                <span className="font-mono">{interviewMode ? 'INTERVIEW' : 'NO CALL'}</span>
+              </button>
+
+              <div className="h-4 w-px bg-aira-border" />
+            </>
+          )}
+
           <div className="relative">
-            <button
-              onClick={() => setShowAgentPanel(!showAgentPanel)}
-              className={`flex items-center gap-1 text-xs transition-colors ${showAgentPanel ? 'text-aira-blue' : 'text-aira-text-dim/70 hover:text-aira-blue'}`}
-              title="Agent fleet status"
-            >
+            <button onClick={() => setShowAgentPanel(!showAgentPanel)} title="Agent fleet status"
+              className={`flex items-center gap-1 text-xs transition-colors ${showAgentPanel ? 'text-aira-blue' : 'text-aira-text-dim/70 hover:text-aira-blue'}`}>
               <Users className="w-3.5 h-3.5" />
               <span className="font-mono">FLEET</span>
               {showAgentPanel ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             </button>
-            {showAgentPanel && (
-              <AgentStatusPanel onClose={() => setShowAgentPanel(false)} />
-            )}
+            {showAgentPanel && <AgentStatusPanel onClose={() => setShowAgentPanel(false)} />}
           </div>
 
           <div className="h-4 w-px bg-aira-border" />
           <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Memory active">
-            <Brain className="w-3 h-3 text-aira-blue/50" />
-            <span>MEM</span>
+            <Brain className="w-3 h-3 text-aira-blue/50" /><span>MEM</span>
           </div>
           <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Screen awareness active">
-            <Monitor className="w-3 h-3 text-aira-blue/50" />
-            <span>SCREEN</span>
+            <Monitor className="w-3 h-3 text-aira-blue/50" /><span>SCREEN</span>
           </div>
           <div className="h-4 w-px bg-aira-border" />
           <button onClick={clearChat} className="flex items-center gap-1.5 text-xs text-aira-text-dim hover:text-aira-blue transition-colors">
@@ -861,11 +826,8 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       </div>
 
       {/* Messages */}
-      <div
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0"
-      >
+      <div ref={scrollContainerRef} onScroll={handleScroll}
+           className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
         {messages.map((msg, i) => {
           const prevWasHistory = i > 0 && messages[i - 1]?.fromHistory
           const thisIsNew = !msg.fromHistory
@@ -886,7 +848,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           )
         })}
 
-        {/* Streaming tool events */}
         {streamingTools.length > 0 && (
           <div className="flex items-start gap-3">
             <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 border ${getAgentStyle(streamingAgent).bg} ${getAgentStyle(streamingAgent).border}`}>
@@ -894,9 +855,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
             </div>
             <div className="flex flex-col">
               {streamingTools.map((ev, i) => {
-                if (ev.type === 'delegation') {
-                  return <AgentDelegationBadge key={i} agent={ev.agent} />
-                }
+                if (ev.type === 'delegation') return <AgentDelegationBadge key={i} agent={ev.agent} />
                 if (ev.type === 'tool_call' || ev.type === 'tool_result') {
                   return <ToolCallBadge key={i} tool={ev.tool} args={ev.args} result={ev.result} success={ev.success !== false} pending={ev.pending} />
                 }
@@ -906,16 +865,13 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           </div>
         )}
 
-        {/* Streaming text */}
         {streamingContent && (
           <div className="flex items-start gap-3 message-enter">
             <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 border ${getAgentStyle(streamingAgent).bg} ${getAgentStyle(streamingAgent).border}`}>
               <span className="text-xs animate-pulse">{AGENT_ICONS[streamingAgent] || '⚡'}</span>
             </div>
             <div className="flex flex-col items-start gap-1">
-              {streamingAgent && streamingAgent !== 'NOVA' && (
-                <AgentBadge agentName={streamingAgent} />
-              )}
+              {streamingAgent && streamingAgent !== 'NOVA' && <AgentBadge agentName={streamingAgent} />}
               <div className="aira-panel px-4 py-3 max-w-[82%]">
                 <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:text-aira-blue prose-code:text-aira-blue prose-code:bg-aira-darker prose-code:px-1 prose-code:rounded prose-li:my-0.5 prose-strong:text-aira-text">
                   <ReactMarkdown>{streamingContent}</ReactMarkdown>
@@ -930,7 +886,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Quick prompts */}
       {messages.length <= 1 && (
         <div className="px-4 pb-2 flex gap-2 flex-wrap flex-shrink-0">
           {QUICK_PROMPTS.map((p, i) => (
@@ -945,17 +900,22 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       {/* Input */}
       <div className="px-4 py-3 border-t border-aira-border flex-shrink-0">
         {copied && <div className="text-xs text-aira-green font-mono mb-2">✓ Copied to clipboard</div>}
-        {transcript && <div className="text-xs text-aira-blue font-mono mb-2 animate-pulse">🎤 "{transcript}"</div>}
+        {liveCommand && <div className="text-xs text-aira-blue font-mono mb-2 animate-pulse">🎤 "{liveCommand}"</div>}
 
         <div className="flex items-end gap-2">
-          {sttSupported && (
-            <button onClick={toggleMic} disabled={loading} title={listening ? 'Stop' : 'Speak'}
+          {IS_ELECTRON && (
+            <button onClick={toggleVoice} disabled={loading}
+              title={voiceEnabled ? 'Disable voice' : 'Enable voice'}
               className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
-                listening
-                  ? 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-500/30'
-                  : 'bg-aira-darker border border-aira-border text-aira-text-dim hover:border-aira-blue hover:text-aira-blue'
+                interviewMode
+                  ? 'bg-red-500/20 text-red-400 cursor-not-allowed'
+                  : voiceEnabled
+                    ? isListeningCommand
+                      ? 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-500/30'
+                      : 'bg-aira-blue/20 border border-aira-blue/30 text-aira-blue'
+                    : 'bg-aira-darker border border-aira-border text-aira-text-dim hover:border-aira-blue hover:text-aira-blue'
               }`}>
-              {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              {voiceEnabled && !interviewMode ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
             </button>
           )}
 
@@ -965,7 +925,11 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
-              placeholder={listening ? 'Listening… speak now' : 'Message NOVA or say "Hey Nova"…'}
+              placeholder={
+                interviewMode ? 'Voice muted — type your message…' :
+                isListeningCommand ? 'Listening… speak now' :
+                'Message NOVA or say "Hey Nova"…'
+              }
               className="w-full bg-transparent text-sm text-aira-text placeholder-aira-text-dim outline-none resize-none max-h-32 min-h-[24px]"
               rows={1}
               onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px' }}
@@ -980,7 +944,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         </div>
 
         <p className="text-xs text-aira-text-dim mt-2 text-center font-mono">
-          NOVA · 7-Agent Fleet · Groq LLaMA 3.3 70B · Say "Hey Nova" · Built for Mr. V
+          NOVA · 7-Agent Fleet · whisper.cpp local voice · Samantha TTS · Cmd+Shift+M for Interview Mode
         </p>
       </div>
     </div>
