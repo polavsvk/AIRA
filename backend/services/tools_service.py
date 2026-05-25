@@ -425,57 +425,41 @@ async def tool_browser_read(url: str, extract: str = "main_content") -> dict:
 
 
 async def tool_youtube_search(query: str, play_best: bool = False) -> dict:
-    """Search YouTube and return results; optionally open the best match."""
+    """
+    Open YouTube in Chrome with the search query.
+    Uses Chrome directly with the user's existing session — no scraping, no bot errors.
+    For music/songs, opens YouTube Music (better for audio).
+    """
+    from urllib.parse import quote_plus
+    encoded = quote_plus(query)
+
+    # Detect if this is a music/song request
+    music_hints = ['song', 'music', 'album', 'audio', 'lyrics', 'remix',
+                   'ft.', 'feat', 'track', 'official audio', 'bollywood',
+                   'playlist', 'lofi', 'instrumental']
+    is_music = play_best or any(k in query.lower() for k in music_hints)
+
+    if is_music:
+        # YouTube Music — far better for songs, shows results cleanly
+        url = f"https://music.youtube.com/search?q={encoded}"
+        label = "YouTube Music"
+    else:
+        # Regular YouTube search
+        url = f"https://www.youtube.com/results?search_query={encoded}"
+        label = "YouTube"
+
+    await tool_browser_open(url, "chrome")
+    return {
+        "success": True,
+        "result": f"Opened {label} in Chrome searching for: {query}. Click the top result to play.",
+        "url": url
+    }
+
+
+async def _tool_youtube_search_OLD(query: str, play_best: bool = False) -> dict:
+    """Old scraping approach — kept for reference but not used (YouTube blocks bots)."""
     search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
-
     try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        }
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            response = await client.get(search_url, headers=headers)
-            html = response.text
-
-        import re
-
-        # Extract video IDs and metadata from the page JSON
-        video_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-        titles_raw = re.findall(r'"title":{"runs":\[{"text":"([^"]+)"', html)
-        channels_raw = re.findall(r'"ownerText":{"runs":\[{"text":"([^"]+)"', html)
-
-        # Deduplicate while preserving order
-        seen: set = set()
-        results = []
-        for vid_id in video_ids:
-            if vid_id not in seen and len(results) < 8:
-                seen.add(vid_id)
-                idx = len(results)
-                title = titles_raw[idx] if idx < len(titles_raw) else "Unknown Title"
-                channel = channels_raw[idx] if idx < len(channels_raw) else "Unknown Channel"
-                results.append({
-                    "id": vid_id,
-                    "title": title,
-                    "channel": channel,
-                    "url": f"https://www.youtube.com/watch?v={vid_id}"
-                })
-
-        if not results:
-            # Fallback: just open the search page
-            await tool_browser_open(search_url, "chrome")
-            return {"success": True, "result": f"Opened YouTube search for: {query}", "opened_search": True}
-
-        if play_best and results:
-            await tool_browser_open(results[0]["url"], "chrome")
-            return {
-                "success": True,
-                "result": f"Playing: {results[0]['title']} by {results[0]['channel']}",
-                "played": results[0],
-                "results": results
-            }
 
         result_text = "\n".join(
             [f"{i + 1}. {r['title']} — {r['channel']}" for i, r in enumerate(results)]
