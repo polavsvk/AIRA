@@ -1,0 +1,34 @@
+{
+  "name": "nova-assistant",
+  "version": "2.0.0",
+  "description": "NOVA — AI Personal Assistant for Mr. V",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "build": "electron-builder --mac",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.mrv.nova",
+    "productName": "NOVA",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg"],
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "files": ["main.js", "preload.js", "assets/**"],
+    "extraResources": [
+      { "from": "../backend", "to": "backend" },
+      { "from": "../frontend/dist", "to": "public" }
+    ],
+    "asar": true
+  }
+}

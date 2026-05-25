@@ -35,7 +35,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-aira-dark overflow-hidden">
+    <div className="h-screen flex flex-col bg-aira-dark overflow-hidden" title="NOVA — AI Personal Assistant">
       {/* Header */}
       <Header isOnline={isOnline} />
 
