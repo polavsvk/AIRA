@@ -175,6 +175,52 @@ NOVA_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_status",
+            "description": "Get the status of all NOVA agents — who is active, task counts, active MARK agents. Use when Mr. V asks how many agents are working, agent status, fleet status.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_mark_agent",
+            "description": "Create a temporary MARK agent for a specific dedicated task. NOVA uses this when a task needs isolated focus — e.g. 'research my competitors', 'process all these files'. Returns the MARK agent name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The specific task this MARK agent is being created for"
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "kill_mark_agent",
+            "description": "Deactivate a MARK agent when its task is complete. Frees the agent slot for reuse.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The MARK agent name to kill, e.g. 'MARK-1'"
+                    }
+                },
+                "required": ["name"]
+            }
+        }
     }
 ]
 
@@ -210,6 +256,12 @@ async def execute_tool(tool_name: str, args: dict) -> dict:
             return await tool_mac_open(args["target"], args.get("app"))
         elif tool_name == "web_search":
             return await tool_web_search(args["query"], args.get("num_results", 5))
+        elif tool_name == "get_agent_status":
+            return await tool_get_agent_status()
+        elif tool_name == "spawn_mark_agent":
+            return await tool_spawn_mark_agent(args["task"])
+        elif tool_name == "kill_mark_agent":
+            return await tool_kill_mark_agent(args["name"])
         else:
             return {"success": False, "result": f"Unknown tool: {tool_name}"}
     except KeyError as e:
@@ -505,6 +557,44 @@ async def tool_mac_open(target: str, app: Optional[str] = None) -> dict:
         return {"success": True, "result": f"Opened: {target}"}
     except Exception as e:
         return {"success": False, "result": f"Could not open: {str(e)}"}
+
+
+async def tool_get_agent_status() -> dict:
+    """Return the current NOVA agent fleet status."""
+    try:
+        from agents.registry import registry
+        status = registry.get_status()
+        summary = registry.get_summary_text()
+        return {"success": True, "result": summary, "status": status}
+    except Exception as e:
+        return {"success": False, "result": f"Could not retrieve agent status: {str(e)}"}
+
+
+async def tool_spawn_mark_agent(task: str) -> dict:
+    """Spawn a new MARK temporary agent."""
+    try:
+        from agents.registry import registry
+        name = registry.spawn_mark(task)
+        return {
+            "success": True,
+            "result": f"{name} is online and assigned to: {task}",
+            "agent_name": name,
+        }
+    except Exception as e:
+        return {"success": False, "result": f"Could not spawn MARK agent: {str(e)}"}
+
+
+async def tool_kill_mark_agent(name: str) -> dict:
+    """Kill a MARK agent and free its slot."""
+    try:
+        from agents.registry import registry
+        success = registry.kill_mark(name)
+        if success:
+            return {"success": True, "result": f"{name} deactivated. Slot cleared and available for reuse."}
+        else:
+            return {"success": False, "result": f"{name} not found — may already be deactivated."}
+    except Exception as e:
+        return {"success": False, "result": f"Could not kill agent: {str(e)}"}
 
 
 async def tool_web_search(query: str, num_results: int = 5) -> dict:

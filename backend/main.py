@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_tables
-from routes import chat, weather, news, tasks, memory
+from routes import chat, weather, news, tasks, memory, agents
 
 app = FastAPI(
     title="NOVA API",
@@ -29,6 +29,7 @@ app.include_router(weather.router)
 app.include_router(news.router)
 app.include_router(tasks.router)
 app.include_router(memory.router)
+app.include_router(agents.router)
 
 
 @app.get("/")

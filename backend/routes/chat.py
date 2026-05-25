@@ -1,6 +1,6 @@
 """
 NOVA Chat Routes
-Streaming chat with tool use, confirmations, memory saving, and greeting.
+Streaming chat with agent routing, tool use, confirmations, memory saving, and greeting.
 """
 
 import json
@@ -16,6 +16,7 @@ from services.groq_service import (
     get_chat_response,
 )
 from services.memory_service import save_message
+from agents.router import classify_message, should_announce
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -48,17 +49,31 @@ async def chat(request: ChatRequest):
 
 @router.post("/stream")
 async def chat_stream(request: ChatRequest):
-    """Streaming chat with full tool use + auto memory save."""
+    """Streaming chat with agent routing, full tool use + auto memory save."""
     history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
     session_id = request.session_id or "default"
+
+    # ── Route to the right agent ──────────────────────────────────────────────
+    agent_name = classify_message(request.message)
+    announce = should_announce(agent_name, request.message)
 
     # Save user message immediately
     save_message(session_id, "user", request.message)
 
     async def generate():
         full_response = ""
+
+        # If this is a complex task, announce the delegation first
+        if announce:
+            agent_intro = json.dumps({
+                "type": "agent_delegation",
+                "agent": agent_name,
+                "message": f"Routing this to {agent_name}, Mr. V.",
+            })
+            yield f"data: {agent_intro}\n\n"
+
         async for event in get_chat_response_stream_with_tools(
-            request.message, history, session_id
+            request.message, history, session_id, agent_name
         ):
             if event.get("type") == "token":
                 full_response += event.get("content", "")

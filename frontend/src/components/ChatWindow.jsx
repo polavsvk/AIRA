@@ -3,13 +3,13 @@ import {
   Send, Zap, Copy, RotateCcw, Mic, MicOff,
   Volume2, VolumeX, Radio, Globe, FileText,
   CheckCircle, XCircle, Loader, AlertTriangle,
-  Brain, Monitor,
+  Brain, Monitor, Users, ChevronDown, ChevronUp,
+  Activity,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
 
 // ─── Session ID ───────────────────────────────────────────────────────────────
-// Persistent across page refreshes, unique per browser/device
 
 function getOrCreateSessionId() {
   const stored = localStorage.getItem('nova_session_id')
@@ -22,7 +22,6 @@ function getOrCreateSessionId() {
 const SESSION_ID = getOrCreateSessionId()
 
 // ─── Greeting Cache ───────────────────────────────────────────────────────────
-// Cache the AI greeting for 1 hour — don't waste an API call every startup
 
 const GREETING_TTL = 60 * 60 * 1000 // 1 hour
 
@@ -47,13 +46,73 @@ function setCachedGreeting(greeting) {
 const WAKE_WORDS = ['hey nova', 'hey nora', 'nova', 'okay nova', 'ok nova']
 
 const QUICK_PROMPTS = [
+  'How many agents are working for me?',
   'Give me my briefing',
   'Open my Gmail',
-  'What\'s on my screen?',
+  "What's on my screen?",
   'Play something on YouTube',
   'What should I focus on today?',
-  'Search the web for something',
 ]
+
+// ─── Agent Config ─────────────────────────────────────────────────────────────
+
+const AGENT_COLORS = {
+  NOVA:   { text: 'text-blue-400',   border: 'border-blue-400/40',   bg: 'bg-blue-400/10'   },
+  ATLAS:  { text: 'text-amber-400',  border: 'border-amber-400/40',  bg: 'bg-amber-400/10'  },
+  HERMES: { text: 'text-emerald-400',border: 'border-emerald-400/40',bg: 'bg-emerald-400/10'},
+  ORACLE: { text: 'text-purple-400', border: 'border-purple-400/40', bg: 'bg-purple-400/10' },
+  TITAN:  { text: 'text-red-400',    border: 'border-red-400/40',    bg: 'bg-red-400/10'    },
+  AEGIS:  { text: 'text-cyan-400',   border: 'border-cyan-400/40',   bg: 'bg-cyan-400/10'   },
+  HERALD: { text: 'text-orange-400', border: 'border-orange-400/40', bg: 'bg-orange-400/10' },
+}
+
+const AGENT_ICONS = {
+  NOVA: '⚡', ATLAS: '📁', HERMES: '🌐',
+  ORACLE: '🔍', TITAN: '🖥️', AEGIS: '🌤️', HERALD: '📰',
+}
+
+function getAgentStyle(agentName) {
+  if (!agentName) return AGENT_COLORS.NOVA
+  if (agentName.startsWith('MARK-')) {
+    return { text: 'text-gray-400', border: 'border-gray-400/40', bg: 'bg-gray-400/10' }
+  }
+  return AGENT_COLORS[agentName] || AGENT_COLORS.NOVA
+}
+
+// ─── Voice — JARVIS-style female ─────────────────────────────────────────────
+
+function getBestFemaleVoice() {
+  const voices = window.speechSynthesis?.getVoices() || []
+
+  // Priority 1: Samantha Enhanced — macOS premium neural, crisp & professional
+  const samanthaEnhanced = voices.find(v =>
+    v.name.toLowerCase().includes('samantha') &&
+    (v.name.includes('Enhanced') || v.name.includes('Premium') || v.name.includes('Neural'))
+  )
+  if (samanthaEnhanced) return samanthaEnhanced
+
+  // Priority 2: Any Samantha (still excellent on macOS)
+  const samantha = voices.find(v => v.name.includes('Samantha') && v.lang.startsWith('en'))
+  if (samantha) return samantha
+
+  // Priority 3: Other neural/enhanced English female voices
+  const MALE_NAMES = ['albert', 'fred', 'ralph', 'bruce', 'daniel', 'james', 'oliver', 'george', 'tom', 'alex']
+  const enhanced = voices.find(v =>
+    v.lang.startsWith('en') &&
+    (v.name.includes('Enhanced') || v.name.includes('Neural') || v.name.includes('Premium')) &&
+    !MALE_NAMES.some(n => v.name.toLowerCase().includes(n))
+  )
+  if (enhanced) return enhanced
+
+  // Priority 4: Named professional female voices
+  for (const n of ['Ava', 'Allison', 'Victoria', 'Karen', 'Moira', 'Tessa', 'Fiona', 'Susan',
+    'Google UK English Female', 'Microsoft Zira', 'Microsoft Hazel', 'Microsoft Susan']) {
+    const v = voices.find(v => v.name.includes(n) && v.lang.startsWith('en'))
+    if (v) return v
+  }
+
+  return voices.find(v => v.lang.startsWith('en')) || voices[0] || null
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -66,23 +125,30 @@ function stripMarkdown(text) {
     .replace(/\n{2,}/g, '. ').replace(/\n/g, ' ').trim()
 }
 
-function getBestFemaleVoice() {
-  const voices = window.speechSynthesis?.getVoices() || []
-  const enhanced = voices.find(v =>
-    v.lang.startsWith('en') &&
-    (v.name.includes('Enhanced') || v.name.includes('Neural') || v.name.includes('Premium')) &&
-    !['albert', 'fred', 'ralph', 'bruce', 'kathy'].some(n => v.name.toLowerCase().includes(n))
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function AgentBadge({ agentName }) {
+  if (!agentName || agentName === 'NOVA') return null
+  const style = getAgentStyle(agentName)
+  const icon = agentName.startsWith('MARK-') ? '⚙️' : (AGENT_ICONS[agentName] || '⚡')
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border ${style.text} ${style.border} ${style.bg}`}>
+      <span>{icon}</span>
+      <span>{agentName}</span>
+    </span>
   )
-  if (enhanced) return enhanced
-  for (const n of ['Samantha', 'Ava', 'Allison', 'Victoria', 'Karen', 'Moira', 'Tessa', 'Fiona',
-    'Google UK English Female', 'Microsoft Zira', 'Microsoft Hazel']) {
-    const v = voices.find(v => v.name.includes(n))
-    if (v) return v
-  }
-  return voices.find(v => v.lang.startsWith('en')) || voices[0] || null
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+function AgentDelegationBadge({ agent }) {
+  const style = getAgentStyle(agent)
+  const icon = AGENT_ICONS[agent] || '⚙️'
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono border my-1 ${style.border} ${style.bg} ${style.text}`}>
+      <span>{icon}</span>
+      <span>Routing to <strong>{agent}</strong>, Mr. V.</span>
+    </div>
+  )
+}
 
 function ToolCallBadge({ tool, args, result, success, pending }) {
   const icons = {
@@ -95,6 +161,9 @@ function ToolCallBadge({ tool, args, result, success, pending }) {
     gmail_open: <Globe className="w-3 h-3" />,
     web_search: <Globe className="w-3 h-3" />,
     mac_open: <Zap className="w-3 h-3" />,
+    get_agent_status: <Users className="w-3 h-3" />,
+    spawn_mark_agent: <Activity className="w-3 h-3" />,
+    kill_mark_agent: <XCircle className="w-3 h-3" />,
   }
   return (
     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono border my-1 ${
@@ -142,11 +211,12 @@ function ConfirmationCard({ confirmationId, tool, data, onConfirm, onDeny }) {
   )
 }
 
-function TypingIndicator() {
+function TypingIndicator({ agentName }) {
+  const style = getAgentStyle(agentName)
   return (
     <div className="flex items-start gap-3 message-enter">
-      <div className="w-7 h-7 rounded-full bg-aira-blue/10 border border-aira-blue/30 flex items-center justify-center flex-shrink-0">
-        <Zap className="w-3.5 h-3.5 text-aira-blue" />
+      <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 border ${style.bg} ${style.border}`}>
+        <span className="text-xs">{AGENT_ICONS[agentName] || '⚡'}</span>
       </div>
       <div className="aira-panel px-4 py-3">
         <div className="flex items-center gap-1.5">
@@ -159,14 +229,32 @@ function TypingIndicator() {
 
 function Message({ message, onCopy, onSpeak }) {
   const isUser = message.role === 'user'
+  const agentName = message.agent
+  const style = getAgentStyle(agentName)
+
   return (
     <div className={`flex items-start gap-3 message-enter ${isUser ? 'flex-row-reverse' : ''}`}>
+      {/* Avatar */}
       <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
-        isUser ? 'bg-aira-gold/10 border border-aira-gold/30' : 'bg-aira-blue/10 border border-aira-blue/30'
+        isUser
+          ? 'bg-aira-gold/10 border border-aira-gold/30'
+          : `${style.bg} border ${style.border}`
       }`}>
-        {isUser ? <span className="text-xs font-bold text-aira-gold">V</span> : <Zap className="w-3.5 h-3.5 text-aira-blue" />}
+        {isUser
+          ? <span className="text-xs font-bold text-aira-gold">V</span>
+          : <span className="text-xs">{AGENT_ICONS[agentName] || '⚡'}</span>
+        }
       </div>
+
       <div className={`group relative max-w-[82%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+        {/* Agent badge — show for non-NOVA agents */}
+        {!isUser && agentName && agentName !== 'NOVA' && (
+          <div className="mb-1">
+            <AgentBadge agentName={agentName} />
+          </div>
+        )}
+
+        {/* Message bubble */}
         <div className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
           isUser
             ? 'bg-aira-blue/10 border border-aira-blue/20 text-aira-text'
@@ -180,7 +268,7 @@ function Message({ message, onCopy, onSpeak }) {
           }
         </div>
 
-        {/* Tool events attached to this message */}
+        {/* Tool events */}
         {message.toolEvents?.map((ev, i) => (
           ev.type === 'confirmation_needed'
             ? <ConfirmationCard key={i} confirmationId={ev.confirmation_id} tool={ev.tool} data={ev.data}
@@ -189,6 +277,7 @@ function Message({ message, onCopy, onSpeak }) {
                 success={ev.success !== false} pending={ev.pending} />
         ))}
 
+        {/* Actions */}
         <div className={`flex items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity ${isUser ? 'flex-row-reverse' : ''}`}>
           <span className="text-xs text-aira-text-dim">
             {message.timestamp?.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
@@ -207,6 +296,100 @@ function Message({ message, onCopy, onSpeak }) {
   )
 }
 
+// ─── Agent Status Panel ───────────────────────────────────────────────────────
+
+function AgentStatusPanel({ onClose }) {
+  const [status, setStatus] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await axios.get('/api/agents/status')
+        setStatus(res.data)
+      } catch { /* silently fail */ }
+      finally { setLoading(false) }
+    }
+    fetchStatus()
+    const interval = setInterval(fetchStatus, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="absolute top-10 right-0 z-50 w-80 bg-aira-panel border border-aira-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-aira-border">
+        <div className="flex items-center gap-2">
+          <Users className="w-3.5 h-3.5 text-aira-blue" />
+          <span className="text-xs font-mono text-aira-text tracking-wider">AGENT FLEET</span>
+        </div>
+        <button onClick={onClose} className="text-aira-text-dim hover:text-aira-text text-xs">✕</button>
+      </div>
+
+      <div className="p-3 max-h-80 overflow-y-auto">
+        {loading && (
+          <div className="flex items-center gap-2 text-xs text-aira-text-dim py-2">
+            <Loader className="w-3 h-3 animate-spin" /> Loading fleet status…
+          </div>
+        )}
+
+        {status && !loading && (
+          <>
+            {/* Permanent agents */}
+            <p className="text-[10px] font-mono text-aira-text-dim/60 tracking-widest mb-2">PERMANENT</p>
+            <div className="space-y-1 mb-3">
+              {Object.entries(status.permanent || {}).map(([name, info]) => {
+                const style = getAgentStyle(name)
+                const icon = AGENT_ICONS[name] || '⚡'
+                return (
+                  <div key={name} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${style.border} ${style.bg}`}>
+                    <span className="text-sm">{icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-xs font-mono font-semibold ${style.text}`}>{name}</div>
+                      <div className="text-[10px] text-aira-text-dim truncate">{info.description}</div>
+                    </div>
+                    <div className="text-[10px] text-aira-text-dim font-mono flex-shrink-0">
+                      {info.tasks > 0 ? `${info.tasks}t` : 'idle'}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* MARK agents */}
+            {Object.keys(status.temporary || {}).length > 0 && (
+              <>
+                <p className="text-[10px] font-mono text-aira-text-dim/60 tracking-widest mb-2">ACTIVE MARKS</p>
+                <div className="space-y-1">
+                  {Object.entries(status.temporary).map(([name, info]) => (
+                    <div key={name} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-gray-400/30 bg-gray-400/5">
+                      <span className="text-sm">⚙️</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-mono font-semibold text-gray-300">{name}</div>
+                        <div className="text-[10px] text-aira-text-dim truncate">{info.task}</div>
+                      </div>
+                      <div className="text-[10px] text-green-400 font-mono">active</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {Object.keys(status.temporary || {}).length === 0 && (
+              <p className="text-[10px] text-aira-text-dim/50 font-mono">No MARK agents active</p>
+            )}
+
+            <div className="mt-3 pt-2 border-t border-aira-border">
+              <p className="text-[10px] text-aira-text-dim font-mono">
+                {status.total_agents} agents · {status.active_marks} MARK{status.active_marks !== 1 ? 's' : ''} active
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
@@ -215,8 +398,10 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [loading, setLoading] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingTools, setStreamingTools] = useState([])
+  const [streamingAgent, setStreamingAgent] = useState('NOVA')
   const [copied, setCopied] = useState(false)
   const [greetingLoaded, setGreetingLoaded] = useState(false)
+  const [showAgentPanel, setShowAgentPanel] = useState(false)
 
   // Voice
   const [voiceEnabled, setVoiceEnabled] = useState(true)
@@ -229,7 +414,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const voiceSupported = 'speechSynthesis' in window
   const sttSupported = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window
 
-  // Refs for stable closures
   const loadingRef = useRef(false)
   const listeningRef = useRef(false)
   const voiceRef = useRef(true)
@@ -245,7 +429,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   useEffect(() => { voiceRef.current = voiceEnabled }, [voiceEnabled])
   useEffect(() => { messagesRef.current = messages }, [messages])
 
-  // ── TTS ──────────────────────────────────────────────────────────────────────
+  // ── TTS — JARVIS-style female voice ──────────────────────────────────────────
   const speak = useCallback((text, onDone) => {
     if (!voiceSupported) { onDone?.(); return }
     window.speechSynthesis.cancel()
@@ -255,9 +439,9 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     const fire = () => {
       const u = new SpeechSynthesisUtterance(clean)
       u.voice = getBestFemaleVoice()
-      u.rate = 1.15
-      u.pitch = 1.1
-      u.volume = 1
+      u.rate = 1.05    // Measured, confident — JARVIS pace (not rushed)
+      u.pitch = 0.95   // Slightly lower = more authoritative, less assistant-like
+      u.volume = 1.0
       u.onstart = () => setSpeaking(true)
       u.onend = () => { setSpeaking(false); onDone?.() }
       u.onerror = () => { setSpeaking(false); onDone?.() }
@@ -351,7 +535,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   useEffect(() => {
     const init = async () => {
       try {
-        // Load previous conversation history
         const histRes = await axios.get('/api/memory/history?limit=40', { timeout: 6000 })
         const pastMessages = (histRes.data?.messages || []).map(m => ({
           role: m.role,
@@ -359,16 +542,19 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           timestamp: new Date(),
           toolEvents: [],
           fromHistory: true,
+          agent: null,
         }))
 
-        // Load AI greeting — use cache if fresh (saves an API call)
         let greet = getCachedGreeting()
         if (!greet) {
           const greetRes = await axios.get('/api/chat/greeting', { timeout: 10000 })
           greet = greetRes.data?.greeting || 'NOVA online. Good day, Mr. V.'
           setCachedGreeting(greet)
         }
-        const greetMsg = { role: 'assistant', content: greet, timestamp: new Date(), toolEvents: [] }
+        const greetMsg = {
+          role: 'assistant', content: greet,
+          timestamp: new Date(), toolEvents: [], agent: 'NOVA'
+        }
 
         const allMsgs = [...pastMessages, greetMsg]
         setMessages(allMsgs)
@@ -376,7 +562,10 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         setGreetingLoaded(true)
         if (voiceRef.current) setTimeout(() => speak(greet), 600)
       } catch {
-        const fallback = { role: 'assistant', content: 'NOVA online. What do you need, Mr. V?', timestamp: new Date(), toolEvents: [] }
+        const fallback = {
+          role: 'assistant', content: 'NOVA online. What do you need, Mr. V?',
+          timestamp: new Date(), toolEvents: [], agent: 'NOVA'
+        }
         setMessages([fallback])
         messagesRef.current = [fallback]
         setGreetingLoaded(true)
@@ -384,7 +573,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     }
     init()
 
-    // Start wake word listener
     if (sttSupported) {
       const t = setTimeout(() => startWakeListen(), 1500)
       return () => {
@@ -397,7 +585,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     }
   }, [])
 
-  // Pending message from briefing modal
   useEffect(() => {
     if (pendingMessage && greetingLoaded && !loadingRef.current) {
       sendMessage(pendingMessage)
@@ -405,7 +592,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     }
   }, [pendingMessage, greetingLoaded])
 
-  // Scroll to bottom
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, streamingContent, loading])
 
   const handleCopy = (text) => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }
@@ -415,7 +601,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     try {
       const res = await axios.post('/api/chat/confirm', { confirmation_id: confirmationId })
       const resultText = res.data?.result || 'Done.'
-      // Update the message that contains this confirmation
       setMessages(prev => prev.map(m => ({
         ...m,
         toolEvents: (m.toolEvents || []).map(ev =>
@@ -425,7 +610,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         )
       })))
     } catch {
-      // Update as failed
       setMessages(prev => prev.map(m => ({
         ...m,
         toolEvents: (m.toolEvents || []).map(ev =>
@@ -456,15 +640,15 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     stopSpeaking(); stopCmdListen(); stopWakeListen()
     setInput(''); setTranscript('')
 
-    const userMsg = { role: 'user', content: msg, timestamp: new Date(), toolEvents: [] }
+    const userMsg = { role: 'user', content: msg, timestamp: new Date(), toolEvents: [], agent: null }
     const updated = [...messagesRef.current, userMsg]
     setMessages(updated); messagesRef.current = updated
-    setLoading(true); setStreamingContent(''); setStreamingTools([])
+    setLoading(true); setStreamingContent(''); setStreamingTools([]); setStreamingAgent('NOVA')
 
     const history = updated.slice(-20).map(m => ({ role: m.role, content: m.content }))
 
     let fullContent = ''
-    const toolEvents = []
+    let currentAgent = 'NOVA'
     let currentToolEvents = []
 
     try {
@@ -486,8 +670,17 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           try {
             const ev = JSON.parse(line.slice(6))
 
-            if (ev.type === 'rate_limit') {
-              // Show countdown in the input area
+            if (ev.type === 'agent_started') {
+              currentAgent = ev.agent
+              setStreamingAgent(ev.agent)
+
+            } else if (ev.type === 'agent_delegation') {
+              // Show a delegation badge in the stream area
+              const delEv = { type: 'delegation', agent: ev.agent, message: ev.message }
+              currentToolEvents.push(delEv)
+              setStreamingTools([...currentToolEvents])
+
+            } else if (ev.type === 'rate_limit') {
               const secs = ev.retry_after || 60
               setTranscript(`⏳ Rate limited — resets in ~${secs}s`)
               setTimeout(() => setTranscript(''), secs * 1000)
@@ -502,7 +695,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
               setStreamingTools([...currentToolEvents])
 
             } else if (ev.type === 'tool_result') {
-              // Update the pending tool call to show result
               currentToolEvents = currentToolEvents.map(t =>
                 t.tool === ev.tool && t.pending
                   ? { ...t, pending: false, type: 'tool_result', result: ev.result, success: ev.success }
@@ -529,6 +721,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
                 content: fullContent,
                 timestamp: new Date(),
                 toolEvents: [...currentToolEvents],
+                agent: ev.agent || currentAgent,
                 onConfirm: handleConfirm,
                 onDeny: handleDeny,
               }
@@ -542,7 +735,10 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         }
       }
     } catch {
-      const errMsg = { role: 'assistant', content: '⚠️ Connection lost. Is the backend running?', timestamp: new Date(), toolEvents: [] }
+      const errMsg = {
+        role: 'assistant', content: '⚠️ Connection lost. Is the backend running?',
+        timestamp: new Date(), toolEvents: [], agent: 'NOVA'
+      }
       setMessages(prev => { messagesRef.current = [...prev, errMsg]; return [...prev, errMsg] })
       setStreamingContent(''); setStreamingTools([])
       scheduleWakeRestart(300)
@@ -564,8 +760,10 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
 
   const clearChat = () => {
     stopSpeaking()
-    // Clears the VIEW only — history stays in database, NOVA still remembers
-    const m = [{ role: 'assistant', content: 'Fresh window, Mr. V. Memory\'s intact — I still know everything.', timestamp: new Date(), toolEvents: [] }]
+    const m = [{
+      role: 'assistant', content: "Fresh window, Mr. V. Memory's intact — I still know everything.",
+      timestamp: new Date(), toolEvents: [], agent: 'NOVA'
+    }]
     setMessages(m); messagesRef.current = m; setStreamingContent('')
   }
 
@@ -606,11 +804,29 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
             </button>
           )}
           <div className="h-4 w-px bg-aira-border" />
-          <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Memory active — NOVA remembers across sessions">
+
+          {/* Agent Fleet button */}
+          <div className="relative">
+            <button
+              onClick={() => setShowAgentPanel(!showAgentPanel)}
+              className={`flex items-center gap-1 text-xs transition-colors ${showAgentPanel ? 'text-aira-blue' : 'text-aira-text-dim/70 hover:text-aira-blue'}`}
+              title="Agent fleet status"
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span className="font-mono">FLEET</span>
+              {showAgentPanel ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+            {showAgentPanel && (
+              <AgentStatusPanel onClose={() => setShowAgentPanel(false)} />
+            )}
+          </div>
+
+          <div className="h-4 w-px bg-aira-border" />
+          <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Memory active">
             <Brain className="w-3 h-3 text-aira-blue/50" />
             <span>MEM</span>
           </div>
-          <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Screen awareness active — say 'what's on my screen?'">
+          <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Screen awareness active">
             <Monitor className="w-3 h-3 text-aira-blue/50" />
             <span>SCREEN</span>
           </div>
@@ -624,7 +840,6 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
         {messages.map((msg, i) => {
-          // Show divider before the first non-history message
           const prevWasHistory = i > 0 && messages[i - 1]?.fromHistory
           const thisIsNew = !msg.fromHistory
           const showDivider = prevWasHistory && thisIsNew
@@ -647,15 +862,19 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         {/* Streaming tool events */}
         {streamingTools.length > 0 && (
           <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-full bg-aira-blue/10 border border-aira-blue/30 flex items-center justify-center flex-shrink-0">
-              <Zap className="w-3.5 h-3.5 text-aira-blue animate-pulse" />
+            <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 border ${getAgentStyle(streamingAgent).bg} ${getAgentStyle(streamingAgent).border}`}>
+              <span className="text-xs animate-pulse">{AGENT_ICONS[streamingAgent] || '⚡'}</span>
             </div>
             <div className="flex flex-col">
-              {streamingTools.map((ev, i) => (
-                ev.type === 'tool_call' || ev.type === 'tool_result'
-                  ? <ToolCallBadge key={i} tool={ev.tool} args={ev.args} result={ev.result} success={ev.success !== false} pending={ev.pending} />
-                  : null
-              ))}
+              {streamingTools.map((ev, i) => {
+                if (ev.type === 'delegation') {
+                  return <AgentDelegationBadge key={i} agent={ev.agent} />
+                }
+                if (ev.type === 'tool_call' || ev.type === 'tool_result') {
+                  return <ToolCallBadge key={i} tool={ev.tool} args={ev.args} result={ev.result} success={ev.success !== false} pending={ev.pending} />
+                }
+                return null
+              })}
             </div>
           </div>
         )}
@@ -663,23 +882,28 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         {/* Streaming text */}
         {streamingContent && (
           <div className="flex items-start gap-3 message-enter">
-            <div className="w-7 h-7 rounded-full bg-aira-blue/10 border border-aira-blue/30 flex items-center justify-center flex-shrink-0">
-              <Zap className="w-3.5 h-3.5 text-aira-blue animate-pulse" />
+            <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 border ${getAgentStyle(streamingAgent).bg} ${getAgentStyle(streamingAgent).border}`}>
+              <span className="text-xs animate-pulse">{AGENT_ICONS[streamingAgent] || '⚡'}</span>
             </div>
-            <div className="aira-panel px-4 py-3 max-w-[82%]">
-              <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:text-aira-blue prose-code:text-aira-blue prose-code:bg-aira-darker prose-code:px-1 prose-code:rounded prose-li:my-0.5 prose-strong:text-aira-text">
-                <ReactMarkdown>{streamingContent}</ReactMarkdown>
+            <div className="flex flex-col items-start gap-1">
+              {streamingAgent && streamingAgent !== 'NOVA' && (
+                <AgentBadge agentName={streamingAgent} />
+              )}
+              <div className="aira-panel px-4 py-3 max-w-[82%]">
+                <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:text-aira-blue prose-code:text-aira-blue prose-code:bg-aira-darker prose-code:px-1 prose-code:rounded prose-li:my-0.5 prose-strong:text-aira-text">
+                  <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                </div>
+                <span className="inline-block w-1.5 h-4 bg-aira-blue ml-0.5 animate-pulse align-text-bottom" />
               </div>
-              <span className="inline-block w-1.5 h-4 bg-aira-blue ml-0.5 animate-pulse align-text-bottom" />
             </div>
           </div>
         )}
 
-        {loading && !streamingContent && streamingTools.length === 0 && <TypingIndicator />}
+        {loading && !streamingContent && streamingTools.length === 0 && <TypingIndicator agentName={streamingAgent} />}
         <div ref={bottomRef} />
       </div>
 
-      {/* Quick prompts — shown only on empty chat */}
+      {/* Quick prompts */}
       {messages.length <= 1 && (
         <div className="px-4 pb-2 flex gap-2 flex-wrap flex-shrink-0">
           {QUICK_PROMPTS.map((p, i) => (
@@ -729,7 +953,7 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
         </div>
 
         <p className="text-xs text-aira-text-dim mt-2 text-center font-mono">
-          NOVA · Groq LLaMA 3.3 70B · Say "Hey Nova" to wake · Built for Mr. V
+          NOVA · 7-Agent Fleet · Groq LLaMA 3.3 70B · Say "Hey Nova" · Built for Mr. V
         </p>
       </div>
     </div>

@@ -17,6 +17,9 @@ from datetime import datetime
 from .tools_service import NOVA_TOOLS, execute_tool, tool_file_write_confirmed
 from .memory_service import get_memory_context, extract_facts_from_conversation
 from .screen_service import analyze_screen
+from agents.definitions import get_agent_system_addon
+from agents.router import get_agent_tools
+from agents.registry import registry
 
 load_dotenv()
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
@@ -112,8 +115,8 @@ pending_confirmations: dict = {}
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
-def _build_system_message() -> str:
-    """Build system message: base prompt + current time + memory facts."""
+def _build_system_message(agent_name: str = "NOVA", mark_task: str = None) -> str:
+    """Build system message: base prompt + time + memory + agent specialisation addon."""
     now = datetime.now()
     time_ctx = (
         f"\n\nCurrent time: {now.strftime('%I:%M %p')} on "
@@ -125,11 +128,15 @@ def _build_system_message() -> str:
     if memory_ctx:
         time_ctx += f"\n\n{memory_ctx}"
 
-    return NOVA_SYSTEM_PROMPT + time_ctx
+    # Agent specialisation addon
+    agent_addon = get_agent_system_addon(agent_name, mark_task)
+
+    return NOVA_SYSTEM_PROMPT + time_ctx + agent_addon
 
 
-def _build_messages(message: str, history: List[dict]) -> list:
-    msgs = [{"role": "system", "content": _build_system_message()}]
+def _build_messages(message: str, history: List[dict],
+                    agent_name: str = "NOVA", mark_task: str = None) -> list:
+    msgs = [{"role": "system", "content": _build_system_message(agent_name, mark_task)}]
     for m in history[-20:]:
         if m.get("role") in ("user", "assistant") and m.get("content"):
             msgs.append({"role": m["role"], "content": m["content"]})
@@ -143,21 +150,39 @@ async def get_chat_response_stream_with_tools(
     message: str,
     history: List[dict] = [],
     session_id: str = "default",
+    agent_name: str = "NOVA",
+    mark_task: str = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Main chat entry point. Streams events:
+      {"type": "agent_started",       "agent": str}
       {"type": "token",               "content": str}
       {"type": "tool_call",           "tool": str, "args": dict}
       {"type": "tool_result",         "tool": str, "result": str, "success": bool}
       {"type": "confirmation_needed", "confirmation_id": str, "tool": str, "data": dict}
-      {"type": "done",                "full_content": str}
+      {"type": "done",                "full_content": str, "agent": str}
     """
     if not client:
         yield {"type": "token", "content": "GROQ_API_KEY not configured, Mr. V."}
-        yield {"type": "done", "full_content": ""}
+        yield {"type": "done", "full_content": "", "agent": agent_name}
         return
 
-    messages = _build_messages(message, history)
+    # Emit which agent is handling this request
+    yield {"type": "agent_started", "agent": agent_name}
+
+    # Record task with registry
+    registry.record_task(agent_name)
+
+    # Build messages with agent-specific system prompt
+    messages = _build_messages(message, history, agent_name, mark_task)
+
+    # Filter tools to only what this agent can use
+    agent_tool_names = get_agent_tools(agent_name)
+    tools_for_agent = [t for t in NOVA_TOOLS if t["function"]["name"] in agent_tool_names]
+    # Fall back to full toolset if agent has no specific tools (AEGIS, HERALD — handled upstream)
+    if not tools_for_agent:
+        tools_for_agent = NOVA_TOOLS
+
     max_tool_rounds = 6
     full_response = ""
 
@@ -166,7 +191,7 @@ async def get_chat_response_stream_with_tools(
             response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=messages,
-                tools=NOVA_TOOLS,
+                tools=tools_for_agent,
                 tool_choice="auto",
                 temperature=0.7,
                 max_tokens=2048,
@@ -187,7 +212,7 @@ async def get_chat_response_stream_with_tools(
             )
             yield {"type": "rate_limit", "retry_after": retry_after}
             yield {"type": "token", "content": msg}
-            yield {"type": "done", "full_content": msg}
+            yield {"type": "done", "full_content": msg, "agent": agent_name}
             return
 
         except GroqBadRequestError as e:
@@ -261,15 +286,15 @@ async def get_chat_response_stream_with_tools(
                 for word in text.split(" "):
                     yield {"type": "token", "content": word + " "}
                     await asyncio.sleep(0.008)
-                yield {"type": "done", "full_content": text}
+                yield {"type": "done", "full_content": text, "agent": agent_name}
             except Exception:
                 yield {"type": "token", "content": "Tool call failed, Mr. V. Try rephrasing."}
-                yield {"type": "done", "full_content": ""}
+                yield {"type": "done", "full_content": "", "agent": agent_name}
             return
 
         except Exception as e:
             yield {"type": "token", "content": f"Error: {str(e)[:120]}"}
-            yield {"type": "done", "full_content": ""}
+            yield {"type": "done", "full_content": "", "agent": agent_name}
             return
 
         msg = response.choices[0].message
@@ -356,7 +381,7 @@ async def get_chat_response_stream_with_tools(
             yield {"type": "token", "content": chunk}
             await asyncio.sleep(0.008)
 
-        yield {"type": "done", "full_content": full_response}
+        yield {"type": "done", "full_content": full_response, "agent": agent_name}
 
         # Background: extract facts from this conversation
         all_messages = [{"role": m["role"], "content": m["content"]}
@@ -368,7 +393,7 @@ async def get_chat_response_stream_with_tools(
     # Exceeded tool rounds
     msg = "Hit my tool round limit, Mr. V. Something's looping — want me to try differently?"
     yield {"type": "token", "content": msg}
-    yield {"type": "done", "full_content": msg}
+    yield {"type": "done", "full_content": msg, "agent": agent_name}
 
 
 # ─── Confirmation ─────────────────────────────────────────────────────────────
