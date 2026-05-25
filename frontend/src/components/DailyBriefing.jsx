@@ -51,7 +51,7 @@ ${articles.map((a, i) => `  ${i + 1}. "${a.title}" — ${a.source} (${a.publishe
 ${pendingTasks.map((t, i) => `  ${i + 1}. [${t.priority.toUpperCase()}] ${t.title}${t.due_date ? ` — due ${t.due_date}` : ''}${t.description ? ` (${t.description})` : ''}`).join('\n')}`
         : `TASKS: NONE PENDING — do NOT invent tasks. Say "No pending tasks."`
 
-      const prompt = `AIRA DAILY BRIEFING REQUEST
+      const prompt = `NOVA DAILY BRIEFING REQUEST
 Time: ${timeStr} — ${dateStr}
 
 ⚠️ STRICT INSTRUCTION: You are receiving REAL live data below.
@@ -199,7 +199,7 @@ Do not use bullet points — speak naturally, like FRIDAY briefing Tony Stark.`
               <button onClick={sendBriefing}
                 className="w-full aira-btn-primary flex items-center justify-center gap-2">
                 <Radio className="w-4 h-4" />
-                <span>Brief Me, AIRA</span>
+                <span>Brief Me, NOVA</span>
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>

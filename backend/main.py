@@ -4,9 +4,9 @@ from database import create_tables
 from routes import chat, weather, news, tasks
 
 app = FastAPI(
-    title="AIRA API",
-    description="Advanced Intelligent Responsive Assistant — Backend API",
-    version="1.0.0"
+    title="NOVA API",
+    description="NOVA — AI Personal Assistant for Mr. V",
+    version="2.0.0"
 )
 
 # CORS — allow frontend to communicate with backend
@@ -33,11 +33,11 @@ app.include_router(tasks.router)
 @app.get("/")
 async def root():
     return {
-        "name": "AIRA",
-        "full_name": "Advanced Intelligent Responsive Assistant",
+        "name": "NOVA",
+        "full_name": "AI Personal Assistant",
         "status": "online",
-        "version": "1.0.0",
-        "message": "AIRA systems are fully operational, Mr. V."
+        "version": "2.0.0",
+        "message": "NOVA systems fully operational, Mr. V."
     }
 
 
