@@ -21,6 +21,27 @@ function getOrCreateSessionId() {
 
 const SESSION_ID = getOrCreateSessionId()
 
+// ─── Greeting Cache ───────────────────────────────────────────────────────────
+// Cache the AI greeting for 1 hour — don't waste an API call every startup
+
+const GREETING_TTL = 60 * 60 * 1000 // 1 hour
+
+function getCachedGreeting() {
+  try {
+    const raw = localStorage.getItem('nova_greeting_cache')
+    if (!raw) return null
+    const { greeting, timestamp } = JSON.parse(raw)
+    if (Date.now() - timestamp < GREETING_TTL) return greeting
+  } catch {}
+  return null
+}
+
+function setCachedGreeting(greeting) {
+  try {
+    localStorage.setItem('nova_greeting_cache', JSON.stringify({ greeting, timestamp: Date.now() }))
+  } catch {}
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const WAKE_WORDS = ['hey nova', 'hey nora', 'nova', 'okay nova', 'ok nova']
@@ -340,9 +361,13 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           fromHistory: true,
         }))
 
-        // Load AI-generated greeting (memory-aware)
-        const greetRes = await axios.get('/api/chat/greeting', { timeout: 10000 })
-        const greet = greetRes.data?.greeting || 'NOVA online. Good day, Mr. V.'
+        // Load AI greeting — use cache if fresh (saves an API call)
+        let greet = getCachedGreeting()
+        if (!greet) {
+          const greetRes = await axios.get('/api/chat/greeting', { timeout: 10000 })
+          greet = greetRes.data?.greeting || 'NOVA online. Good day, Mr. V.'
+          setCachedGreeting(greet)
+        }
         const greetMsg = { role: 'assistant', content: greet, timestamp: new Date(), toolEvents: [] }
 
         const allMsgs = [...pastMessages, greetMsg]
@@ -461,7 +486,13 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           try {
             const ev = JSON.parse(line.slice(6))
 
-            if (ev.type === 'token') {
+            if (ev.type === 'rate_limit') {
+              // Show countdown in the input area
+              const secs = ev.retry_after || 60
+              setTranscript(`⏳ Rate limited — resets in ~${secs}s`)
+              setTimeout(() => setTranscript(''), secs * 1000)
+
+            } else if (ev.type === 'token') {
               fullContent += ev.content
               setStreamingContent(fullContent)
 

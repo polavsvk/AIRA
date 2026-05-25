@@ -9,6 +9,7 @@ import json
 import asyncio
 from groq import Groq
 from groq import BadRequestError as GroqBadRequestError
+from groq import RateLimitError as GroqRateLimitError
 from typing import List, AsyncGenerator
 from dotenv import load_dotenv
 from datetime import datetime
@@ -171,6 +172,24 @@ async def get_chat_response_stream_with_tools(
                 max_tokens=2048,
                 stream=False,
             )
+        except GroqRateLimitError as e:
+            # Extract retry-after header if Groq provides it
+            retry_after = 60
+            try:
+                headers = getattr(e, "response", None)
+                if headers:
+                    retry_after = int(headers.headers.get("retry-after", 60))
+            except Exception:
+                pass
+            msg = (
+                f"Rate limit hit, Mr. V. Groq free tier allows 30 requests/minute. "
+                f"Wait ~{retry_after}s and try again — or it resets at midnight UTC."
+            )
+            yield {"type": "rate_limit", "retry_after": retry_after}
+            yield {"type": "token", "content": msg}
+            yield {"type": "done", "full_content": msg}
+            return
+
         except GroqBadRequestError as e:
             # ── tool_use_failed: LLaMA generated a malformed tool call ────────
             # Access e.body directly — much more reliable than parsing str(e)
@@ -392,10 +411,15 @@ def get_chat_response(message: str, history: List[dict] = []) -> str:
         return "GROQ_API_KEY not configured, Mr. V."
 
     messages = _build_messages(message, history)
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages,
-        temperature=0.7,
-        max_tokens=2048,
-    )
-    return completion.choices[0].message.content
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        return completion.choices[0].message.content
+    except GroqRateLimitError:
+        return "Rate limited right now, Mr. V. Give it a minute."
+    except Exception as e:
+        return f"Something went wrong: {str(e)[:100]}"
