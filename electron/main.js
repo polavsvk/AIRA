@@ -1,42 +1,63 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, globalShortcut, ipcMain } = require('electron')
+const {
+  app, BrowserWindow, Tray, Menu, nativeImage,
+  shell, globalShortcut, ipcMain, session
+} = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
 
-// Keep global references
 let mainWindow = null
 let tray = null
 let backendProcess = null
 let isQuitting = false
 
-const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
 const BACKEND_PORT = 8000
-const FRONTEND_URL = isDev ? 'http://localhost:5173' : `http://localhost:${BACKEND_PORT}`
+const DEV_FRONTEND_URL = `http://localhost:5173`
+const PROD_FRONTEND_URL = `http://localhost:${BACKEND_PORT}`
+const isDev = process.env.NODE_ENV === 'development'
 
-// ─── Backend Management ───────────────────────────────────────────────────────
+// ─── Microphone & Permissions ─────────────────────────────────────────────────
+// Grant mic + speech API access — NOVA needs these to function
+function setupPermissions() {
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    const allowed = ['media', 'microphone', 'audioCapture', 'speechRecognition']
+    callback(allowed.includes(permission))
+  })
 
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    const allowed = ['media', 'microphone', 'audioCapture', 'speechRecognition']
+    return allowed.includes(permission)
+  })
+}
+
+// ─── Backend ──────────────────────────────────────────────────────────────────
 function startBackend() {
   const backendPath = isDev
     ? path.join(__dirname, '../backend')
     : path.join(process.resourcesPath, 'backend')
 
-  console.log('Starting NOVA backend at:', backendPath)
+  // Use the venv Python — not system Python
+  const pythonPath = path.join(backendPath, 'venv', 'bin', 'python3')
 
-  backendProcess = spawn('python3', ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(BACKEND_PORT)], {
+  console.log('[NOVA] Starting backend:', backendPath)
+  console.log('[NOVA] Python:', pythonPath)
+
+  backendProcess = spawn(pythonPath, [
+    '-m', 'uvicorn', 'main:app',
+    '--host', '127.0.0.1',
+    '--port', String(BACKEND_PORT)
+  ], {
     cwd: backendPath,
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
     detached: false
   })
 
-  backendProcess.stdout?.on('data', (data) => console.log('[Backend]', data.toString()))
-  backendProcess.stderr?.on('data', (data) => console.error('[Backend]', data.toString()))
-  backendProcess.on('error', (err) => console.error('Backend failed to start:', err))
-  backendProcess.on('exit', (code) => {
-    console.log('Backend exited with code:', code)
-    if (!isQuitting) {
-      // Restart backend if it crashes
-      setTimeout(startBackend, 3000)
-    }
+  backendProcess.stdout?.on('data', d => process.stdout.write('[Backend] ' + d))
+  backendProcess.stderr?.on('data', d => process.stderr.write('[Backend] ' + d))
+  backendProcess.on('error', err => console.error('[NOVA] Backend error:', err.message))
+  backendProcess.on('exit', code => {
+    console.log('[NOVA] Backend exited:', code)
+    if (!isQuitting) setTimeout(startBackend, 3000)
   })
 }
 
@@ -47,164 +68,139 @@ function stopBackend() {
   }
 }
 
-async function waitForBackend(maxWait = 15000) {
+function waitForBackend(maxMs = 20000) {
   const start = Date.now()
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const check = () => {
-      http.get(`http://127.0.0.1:${BACKEND_PORT}/api/health`, (res) => {
-        if (res.statusCode === 200) resolve(true)
+      http.get(`http://127.0.0.1:${BACKEND_PORT}/api/health`, res => {
+        if (res.statusCode === 200) { console.log('[NOVA] Backend ready ✓'); resolve(true) }
         else retry()
       }).on('error', retry)
     }
     const retry = () => {
-      if (Date.now() - start > maxWait) { resolve(false); return }
+      if (Date.now() - start > maxMs) { console.error('[NOVA] Backend timeout'); resolve(false); return }
       setTimeout(check, 500)
     }
     check()
   })
 }
 
-// ─── Window Management ────────────────────────────────────────────────────────
-
+// ─── Window ───────────────────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    width: 1300,
+    height: 860,
     minWidth: 900,
     minHeight: 600,
-    titleBarStyle: 'hiddenInset',  // macOS native feel
+    titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#050510',
     vibrancy: 'under-window',
     visualEffectState: 'active',
-    icon: path.join(__dirname, 'assets/icon.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      // Enable Web Speech API
+      experimentalFeatures: true,
     },
-    show: false,  // Show after ready
+    show: false,
   })
 
-  // Load the app
-  mainWindow.loadURL(FRONTEND_URL)
+  const url = isDev ? DEV_FRONTEND_URL : PROD_FRONTEND_URL
+  console.log('[NOVA] Loading:', url)
+  mainWindow.loadURL(url)
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
     mainWindow.focus()
   })
 
-  // Hide to tray instead of closing
-  mainWindow.on('close', (e) => {
+  // Hide to tray on close — don't quit
+  mainWindow.on('close', e => {
     if (!isQuitting) {
       e.preventDefault()
       mainWindow.hide()
-      if (process.platform === 'darwin') app.dock.hide()
+      app.dock?.hide()
     }
   })
 
   mainWindow.on('closed', () => { mainWindow = null })
 
-  // Open external links in browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
   })
+
+  // Dev tools in dev mode
+  if (isDev) {
+    mainWindow.webContents.on('before-input-event', (_, input) => {
+      if (input.key === 'F12') mainWindow.webContents.openDevTools()
+    })
+  }
 }
 
 function showWindow() {
-  if (!mainWindow) {
-    createWindow()
-    return
-  }
-  if (process.platform === 'darwin') app.dock.show()
+  if (!mainWindow) { createWindow(); return }
+  app.dock?.show()
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
 }
 
 function toggleWindow() {
-  if (mainWindow && mainWindow.isVisible() && mainWindow.isFocused()) {
+  if (mainWindow?.isVisible() && mainWindow?.isFocused()) {
     mainWindow.hide()
-    if (process.platform === 'darwin') app.dock.hide()
+    app.dock?.hide()
   } else {
     showWindow()
   }
 }
 
 // ─── Tray ─────────────────────────────────────────────────────────────────────
-
 function createTray() {
-  // Create a simple tray icon (we'll use template image for macOS)
-  const iconPath = path.join(__dirname, 'assets/tray-icon.png')
-  let trayIcon
-
+  const iconPath = path.join(__dirname, 'assets', 'tray-icon.png')
+  let icon
   try {
-    trayIcon = nativeImage.createFromPath(iconPath)
-    // Make it a template image for macOS (auto dark/light mode)
-    trayIcon.setTemplateImage(true)
+    icon = nativeImage.createFromPath(iconPath)
+    icon.setTemplateImage(true)
   } catch {
-    // Fallback: empty image
-    trayIcon = nativeImage.createEmpty()
+    icon = nativeImage.createEmpty()
   }
 
-  tray = new Tray(trayIcon)
+  tray = new Tray(icon)
   tray.setToolTip('NOVA — AI Personal Assistant')
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Open NOVA',
-      click: showWindow,
-      accelerator: 'CmdOrCtrl+Shift+N'
-    },
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open NOVA', click: showWindow },
     { type: 'separator' },
-    {
-      label: 'Show in Dock',
-      click: () => { app.dock.show(); showWindow() }
-    },
+    { label: 'Show in Dock', click: () => { app.dock?.show(); showWindow() } },
     { type: 'separator' },
-    {
-      label: 'Quit NOVA',
-      click: () => {
-        isQuitting = true
-        stopBackend()
-        app.quit()
-      }
-    }
-  ])
+    { label: 'Quit NOVA', click: () => { isQuitting = true; stopBackend(); app.quit() } }
+  ]))
 
-  tray.setContextMenu(contextMenu)
   tray.on('click', toggleWindow)
   tray.on('double-click', showWindow)
 }
 
-// ─── App Lifecycle ────────────────────────────────────────────────────────────
-
+// ─── Lifecycle ────────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
-  // macOS dock icon
-  if (process.platform === 'darwin') {
-    const dockIconPath = path.join(__dirname, 'assets/icon.png')
-    try {
-      app.dock.setIcon(nativeImage.createFromPath(dockIconPath))
-    } catch {}
-  }
+  // Permissions first — before any window loads
+  setupPermissions()
 
   // Start backend
   startBackend()
 
-  // Create tray first so user sees something immediately
+  // Show tray immediately
   createTray()
 
-  // Wait for backend, show loading window
-  const backendReady = await waitForBackend(15000)
+  // Wait for backend
+  await waitForBackend(20000)
 
-  if (!backendReady) {
-    console.error('Backend failed to start within 15 seconds')
-  }
-
+  // Create window
   createWindow()
 
-  // Global shortcut - show/hide NOVA
+  // Global shortcut — Cmd+Shift+Space to toggle
   globalShortcut.register('CommandOrControl+Shift+Space', toggleWindow)
 
   app.on('activate', () => {
@@ -213,8 +209,8 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('window-all-closed', (e) => {
-  // On macOS, don't quit when all windows close - stay in tray
+app.on('window-all-closed', e => {
+  // macOS: stay alive in tray
   if (process.platform !== 'darwin') app.quit()
   else e.preventDefault()
 })
@@ -225,23 +221,12 @@ app.on('before-quit', () => {
   stopBackend()
 })
 
-// ─── Login Item (Auto-start) ──────────────────────────────────────────────────
-// Enable auto-start on login
+// Auto-start on login when packaged
 if (app.isPackaged) {
-  app.setLoginItemSettings({
-    openAtLogin: true,
-    openAsHidden: true,  // Start hidden in menu bar, not as full window
-  })
+  app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true })
 }
 
-// ─── IPC ─────────────────────────────────────────────────────────────────────
+// ─── IPC ──────────────────────────────────────────────────────────────────────
 ipcMain.handle('get-app-version', () => app.getVersion())
-ipcMain.handle('hide-window', () => {
-  mainWindow?.hide()
-  if (process.platform === 'darwin') app.dock.hide()
-})
-ipcMain.handle('quit-app', () => {
-  isQuitting = true
-  stopBackend()
-  app.quit()
-})
+ipcMain.handle('hide-window', () => { mainWindow?.hide(); app.dock?.hide() })
+ipcMain.handle('quit-app', () => { isQuitting = true; stopBackend(); app.quit() })
