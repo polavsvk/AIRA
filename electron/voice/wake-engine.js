@@ -15,10 +15,18 @@ const fs = require('fs')
 const os = require('os')
 
 // ── Paths ────────────────────────────────────────────────────────────────────
-const NOVA_HOME = path.join(os.homedir(), '.nova')
+const NOVA_HOME   = path.join(os.homedir(), '.nova')
 const WHISPER_DIR = path.join(NOVA_HOME, 'whisper.cpp')
-const WHISPER_BIN = path.join(WHISPER_DIR, 'stream')
-const MODEL_PATH = path.join(WHISPER_DIR, 'models', 'ggml-base.en.bin')
+// Newer whisper.cpp (CMake builds) puts binaries in build/bin/
+// Fall back to root-level `stream` for older builds
+const WHISPER_BIN = (() => {
+  const cmakeBin = path.join(WHISPER_DIR, 'build', 'bin', 'stream')
+  const oldBin   = path.join(WHISPER_DIR, 'stream')
+  if (fs.existsSync(cmakeBin)) return cmakeBin
+  if (fs.existsSync(oldBin))   return oldBin
+  return cmakeBin  // default to cmake path (shows correct error)
+})()
+const MODEL_PATH  = path.join(WHISPER_DIR, 'models', 'ggml-base.en.bin')
 
 // ── Wake phrase detection ────────────────────────────────────────────────────
 // Require "hey nova" or similar — bare "nova" causes too many false positives.

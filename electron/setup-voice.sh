@@ -61,30 +61,57 @@ else
   green "✓ Cloned"
 fi
 
-# ── 5. Build the `stream` binary ──────────────────────────────────────────────
+# ── 5. Build the `stream` binary (CMake — required for recent whisper.cpp) ────
 cd "$WHISPER_DIR"
 
-if [ -f "stream" ] && [ -x "stream" ]; then
-  yellow "→ `stream` binary already exists. Rebuilding to be safe..."
-fi
+STREAM_BIN="$WHISPER_DIR/build/bin/stream"
 
-yellow "→ Building whisper.cpp stream (this takes ~1-2 minutes)..."
-make clean &> /dev/null || true
-
-# Detect CPU — use Metal/Accelerate if Apple Silicon
-if [[ "$(uname -m)" == "arm64" ]]; then
-  yellow "  Apple Silicon detected → using Metal acceleration"
-  WHISPER_METAL=1 WHISPER_COREML=0 make stream -j
+if [ -f "$STREAM_BIN" ] && [ -x "$STREAM_BIN" ]; then
+  green "✓ stream binary already built"
 else
-  yellow "  Intel Mac → using Accelerate framework"
-  make stream -j
-fi
+  # Ensure cmake is available
+  if ! command -v cmake &> /dev/null; then
+    yellow "→ Installing cmake via Homebrew..."
+    brew install cmake
+  fi
+  green "✓ cmake found"
 
-if [ ! -x "stream" ]; then
-  red "✗ Build failed — stream binary not found"
-  exit 1
+  yellow "→ Building whisper.cpp stream (this takes ~2-3 minutes)..."
+
+  # Clean any old build state
+  rm -rf build
+
+  # Configure with CMake
+  if [[ "$(uname -m)" == "arm64" ]]; then
+    yellow "  Apple Silicon detected → Metal acceleration enabled"
+    cmake -B build \
+      -DWHISPER_SDL2=ON \
+      -DGGML_METAL=ON \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DWHISPER_BUILD_TESTS=OFF \
+      -DWHISPER_BUILD_EXAMPLES=ON \
+      > /dev/null 2>&1
+  else
+    yellow "  Intel Mac → Accelerate framework"
+    cmake -B build \
+      -DWHISPER_SDL2=ON \
+      -DGGML_METAL=OFF \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DWHISPER_BUILD_TESTS=OFF \
+      -DWHISPER_BUILD_EXAMPLES=ON \
+      > /dev/null 2>&1
+  fi
+
+  # Build just the stream example
+  cmake --build build --config Release --target stream -- -j$(sysctl -n hw.ncpu) 2>&1 | tail -5
+
+  if [ ! -x "$STREAM_BIN" ]; then
+    red "✗ Build failed — stream binary not found at $STREAM_BIN"
+    red "  Try: cd $WHISPER_DIR && cmake -B build -DWHISPER_SDL2=ON && cmake --build build --target stream"
+    exit 1
+  fi
+  green "✓ stream binary built"
 fi
-green "✓ stream binary built"
 
 # ── 6. Download the model ─────────────────────────────────────────────────────
 MODEL_PATH="$WHISPER_DIR/models/$MODEL_FILE"
@@ -125,7 +152,7 @@ green "  ✓ NOVA voice pipeline installed and ready"
 cyan "════════════════════════════════════════════════════════════════════"
 echo
 echo "  Installation paths:"
-echo "    Whisper binary: $WHISPER_DIR/stream"
+echo "    Whisper binary: $WHISPER_DIR/build/bin/stream"
 echo "    Model:          $MODEL_PATH"
 echo
 echo "  Next steps:"
