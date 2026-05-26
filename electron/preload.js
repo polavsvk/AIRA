@@ -37,6 +37,20 @@ contextBridge.exposeInMainWorld('nova', {
     onError:           (cb) => _subscribe('voice:error', cb),
     onNotInstalled:    (cb) => _subscribe('voice:not-installed', cb),
   },
+
+  // ── Proactive engine API ──────────────────────────────────────────────────
+  proactive: {
+    /** Get engine status: { enabled, interview, suppressedUntil, idleMs, nightMode } */
+    getStatus:      () => ipcRenderer.invoke('proactive:status'),
+    /** Toggle proactive on/off — returns new boolean */
+    toggle:         () => ipcRenderer.invoke('proactive:toggle'),
+    /** Temporarily suppress proactive (default 5 min) */
+    suppress:       (ms) => ipcRenderer.invoke('proactive:suppress', ms),
+    /** Fire-and-forget: tell engine the user is active (suppresses idle triggers) */
+    reportActivity: () => ipcRenderer.send('proactive:activity'),
+    /** Receive a NOVA-initiated message: { text, triggerType, priority, timestamp } */
+    onMessage:      (cb) => _subscribe('proactive:message', cb),
+  },
 })
 
 function _subscribe(channel, callback) {

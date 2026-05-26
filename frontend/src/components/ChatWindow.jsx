@@ -4,7 +4,7 @@ import {
   Volume2, VolumeX, Radio, Globe, FileText,
   CheckCircle, XCircle, Loader, AlertTriangle,
   Brain, Monitor, Users, ChevronDown, ChevronUp,
-  Activity, Phone, ShieldAlert,
+  Activity, Phone, ShieldAlert, Sparkles,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
@@ -68,6 +68,16 @@ const AGENT_COLORS = {
 const AGENT_ICONS = {
   NOVA: '⚡', ATLAS: '📁', HERMES: '🌐',
   ORACLE: '🔍', TITAN: '🖥️', AEGIS: '🌤️', HERALD: '📰',
+}
+
+// Labels shown on NOVA-initiated (proactive) messages
+const PROACTIVE_LABELS = {
+  morning_briefing: '⚡ morning briefing',
+  evening_wrap:     '🌙 evening wrap',
+  calendar_alert:   '📅 calendar alert',
+  new_mail:         '📬 new mail',
+  idle_checkin:     '💡 nova initiated',
+  proactive:        '💡 nova initiated',
 }
 
 function getAgentStyle(agentName) {
@@ -219,7 +229,15 @@ function Message({ message, onCopy, onSpeak }) {
       </div>
 
       <div className={`group relative max-w-[82%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
-        {!isUser && agentName && agentName !== 'NOVA' && (
+        {!isUser && message.proactive && (
+          <div className="mb-1 flex items-center gap-1">
+            <Sparkles className="w-2.5 h-2.5 text-aira-blue/70" />
+            <span className="text-[9px] font-mono text-aira-blue/60 tracking-widest uppercase">
+              {PROACTIVE_LABELS[message.triggerType] || 'nova initiated'}
+            </span>
+          </div>
+        )}
+        {!isUser && !message.proactive && agentName && agentName !== 'NOVA' && (
           <div className="mb-1"><AgentBadge agentName={agentName} /></div>
         )}
 
@@ -398,6 +416,10 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [showHUD, setShowHUD] = useState(() => {
     try { return localStorage.getItem('nova_hud_hidden') !== '1' } catch { return true }
   })
+
+  // Proactive engine status
+  const [proactiveEnabled, setProactiveEnabled] = useState(true)
+  const [recentProactive, setRecentProactive] = useState(null) // { triggerType, ts } for flash
   const toggleHUD = () => {
     setShowHUD(v => {
       const next = !v
@@ -418,6 +440,14 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   useEffect(() => { loadingRef.current = loading }, [loading])
   useEffect(() => { voiceRef.current = voiceEnabled }, [voiceEnabled])
   useEffect(() => { messagesRef.current = messages }, [messages])
+
+  // Fetch initial proactive status
+  useEffect(() => {
+    if (!IS_ELECTRON) return
+    window.nova?.proactive?.getStatus().then(s => {
+      if (s) setProactiveEnabled(s.enabled !== false)
+    }).catch(() => {})
+  }, [])
 
   // ── TTS — via Electron IPC (macOS Samantha) ─────────────────────────────────
   const speak = useCallback(async (text) => {
@@ -481,6 +511,34 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
 
       window.nova.voice.onError(err => console.error('[NOVA voice]', err)),
     ]
+
+    // ── Proactive message subscription ─────────────────────────────────────
+    if (window.nova.proactive) {
+      unsubs.push(
+        window.nova.proactive.onMessage(({ text, triggerType, priority, timestamp }) => {
+          if (!text) return
+          const proactiveMsg = {
+            role:        'assistant',
+            content:     text,
+            timestamp:   new Date(timestamp || Date.now()),
+            toolEvents:  [],
+            agent:       'NOVA',
+            proactive:   true,
+            triggerType: triggerType || 'proactive',
+          }
+          setMessages(prev => {
+            const updated = [...prev, proactiveMsg]
+            messagesRef.current = updated
+            return updated
+          })
+          // Flash the "NOVA initiated" indicator in the header briefly
+          setRecentProactive({ triggerType: triggerType || 'proactive', ts: Date.now() })
+          setTimeout(() => setRecentProactive(null), 8000)
+          // Always scroll to bottom for proactive messages
+          userAtBottomRef.current = true
+        })
+      )
+    }
 
     return () => { unsubs.forEach(u => u && u()) }
   }, [])
@@ -607,6 +665,9 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
     const updated = [...messagesRef.current, userMsg]
     setMessages(updated); messagesRef.current = updated
     setLoading(true); setStreamingContent(''); setStreamingTools([]); setStreamingAgent('NOVA')
+
+    // Tell the proactive engine the user is active — suppresses idle triggers
+    if (IS_ELECTRON) window.nova?.proactive?.reportActivity()
 
     const history = updated.slice(-20).map(m => ({ role: m.role, content: m.content }))
 
@@ -778,6 +839,8 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           voiceEnabled={voiceEnabled}
           liveCommand={liveCommand}
           size={170}
+          proactiveEnabled={proactiveEnabled}
+          recentTriggerType={recentProactive?.triggerType || null}
         />
       )}
 
@@ -850,6 +913,27 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
                 className={`flex items-center gap-1 text-xs transition-colors ${interviewMode ? 'text-red-400' : 'text-aira-text-dim/70 hover:text-red-400'}`}>
                 <Phone className="w-3.5 h-3.5" />
                 <span className="font-mono">{interviewMode ? 'INTERVIEW' : 'NO CALL'}</span>
+              </button>
+
+              <div className="h-4 w-px bg-aira-border" />
+
+              <button
+                onClick={async () => {
+                  const next = await window.nova?.proactive?.toggle()
+                  if (next !== undefined) setProactiveEnabled(next)
+                }}
+                title="Toggle NOVA proactive mode"
+                className={`flex items-center gap-1 text-xs transition-colors ${
+                  recentProactive ? 'text-aira-blue animate-pulse' :
+                  proactiveEnabled ? 'text-aira-blue/70' :
+                  'text-aira-text-dim/40'
+                }`}>
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="font-mono">
+                  {recentProactive
+                    ? (PROACTIVE_LABELS[recentProactive.triggerType] || 'NOVA').toUpperCase()
+                    : proactiveEnabled ? 'PROACTIVE' : 'PASSIVE'}
+                </span>
               </button>
 
               <div className="h-4 w-px bg-aira-border" />
@@ -985,7 +1069,11 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
             <textarea
               ref={inputRef}
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={e => {
+                setInput(e.target.value)
+                // Keystroke = user is active → suppress idle proactive triggers
+                if (IS_ELECTRON) window.nova?.proactive?.reportActivity()
+              }}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
               placeholder={
                 interviewMode ? 'Voice muted — type your message…' :

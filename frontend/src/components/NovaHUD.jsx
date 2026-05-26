@@ -62,6 +62,8 @@ export default function NovaHUD({
   voiceEnabled = true,
   liveCommand = '',
   size = 200,
+  proactiveEnabled = true,
+  recentTriggerType = null,
 }) {
   // Effective state for the reactor & label
   let effectiveState = voiceState
@@ -177,10 +179,17 @@ export default function NovaHUD({
 
       {/* Bottom thin status bar */}
       <div className="relative px-6 pb-2 flex items-center justify-between text-[9px] font-mono text-aira-text-dim/40 tracking-widest">
-        <span>NOVA · v2.1 · LOCAL VOICE · GROQ LLM · ZERO CLOUD</span>
-        <span className={voiceEnabled ? 'text-blue-400/80' : 'text-aira-text-dim/40'}>
-          ◉ MIC {voiceEnabled ? 'LIVE' : 'OFF'}
-        </span>
+        <span>NOVA · v3.0 · LOCAL VOICE · GROQ LLM · ZERO CLOUD</span>
+        <div className="flex items-center gap-4">
+          {proactiveEnabled && (
+            <span className={`${recentTriggerType ? 'text-aira-blue/80 animate-pulse' : 'text-aira-text-dim/40'}`}>
+              ◈ PROACTIVE {recentTriggerType ? 'TRIGGERED' : 'ARMED'}
+            </span>
+          )}
+          <span className={voiceEnabled ? 'text-blue-400/80' : 'text-aira-text-dim/40'}>
+            ◉ MIC {voiceEnabled ? 'LIVE' : 'OFF'}
+          </span>
+        </div>
       </div>
     </div>
   )

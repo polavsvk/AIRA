@@ -16,6 +16,7 @@ const http = require('http')
 const { WakeEngine, STATE: VOICE_STATE } = require('./voice/wake-engine')
 const { TTS } = require('./voice/tts')
 const { InterviewMode } = require('./voice/interview-mode')
+const { ProactiveEngine } = require('./proactive/proactive-engine')
 
 let mainWindow = null
 let tray = null
@@ -25,6 +26,7 @@ let isQuitting = false
 let wakeEngine = null
 let tts = null
 let interviewMode = null
+let proactiveEngine = null
 let voiceEnabled = true
 
 const BACKEND_PORT = 8000
@@ -164,11 +166,13 @@ function initVoicePipeline() {
     updateTrayIcon()
 
     if (active) {
-      // Hard stop: kill mic stream, kill TTS
+      // Hard stop: kill mic stream, kill TTS, suppress proactive
       wakeEngine.pause()
       tts.stop()
-    } else if (voiceEnabled) {
-      wakeEngine.resume()
+      proactiveEngine?.setInterviewMode(true)
+    } else {
+      if (voiceEnabled) wakeEngine.resume()
+      proactiveEngine?.setInterviewMode(false)
     }
   })
 
@@ -191,6 +195,123 @@ function stopVoicePipeline() {
   wakeEngine?.stop()
   tts?.stop()
   interviewMode?.stop()
+  proactiveEngine?.stop()
+}
+
+// ── Proactive API call — streams /api/chat/stream from Node.js ───────────────
+function proactiveApiCall(message) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      message,
+      history: [],
+      session_id: 'proactive_engine',
+    })
+
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port:     BACKEND_PORT,
+      path:     '/api/chat/stream',
+      method:   'POST',
+      headers: {
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let buf = ''
+      let fullContent = ''
+
+      res.on('data', chunk => {
+        buf += chunk.toString()
+        const lines = buf.split('\n')
+        buf = lines.pop()  // keep incomplete last line
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev = JSON.parse(line.slice(6))
+            if (ev.type === 'token') fullContent += ev.content
+            else if (ev.type === 'done') { if (fullContent) resolve(fullContent) }
+            else if (ev.type === 'rate_limit') reject(new Error('rate_limited'))
+          } catch {}
+        }
+      })
+
+      res.on('end', () => {
+        if (fullContent) resolve(fullContent)
+        else reject(new Error('empty proactive response'))
+      })
+      res.on('error', reject)
+    })
+
+    req.on('error', reject)
+    req.setTimeout(30_000, () => { req.destroy(); reject(new Error('proactive timeout')) })
+    req.write(body)
+    req.end()
+  })
+}
+
+// ── Handle proactive trigger ──────────────────────────────────────────────────
+async function handleProactiveTrigger(trigger) {
+  try {
+    // Hard guards — these should already be filtered by the engine, but double-check
+    if (interviewMode?.active) return
+    if (isQuitting) return
+
+    let text = ''
+
+    if (trigger.mode === 'instant') {
+      text = trigger.text
+    } else if (trigger.mode === 'api') {
+      console.log(`[Proactive] API call for "${trigger.type}": ${trigger.message.slice(0, 60)}…`)
+      try {
+        text = await proactiveApiCall(trigger.message)
+      } catch (err) {
+        if (err.message === 'rate_limited') {
+          console.warn('[Proactive] Rate limited — skipping trigger')
+          return
+        }
+        console.error('[Proactive] API call failed:', err.message)
+        return
+      }
+    }
+
+    if (!text) return
+
+    console.log(`[Proactive] Firing "${trigger.type}": ${text.slice(0, 80)}…`)
+
+    // Speak it (pause wake engine while speaking — same as regular TTS)
+    if (voiceEnabled && !interviewMode?.active) {
+      await tts?.speak(text)
+    }
+
+    // Push to renderer — appears in the chat as a NOVA-initiated message
+    mainWindow?.webContents.send('proactive:message', {
+      text,
+      triggerType: trigger.type,
+      priority:    trigger.priority || 'medium',
+      timestamp:   Date.now(),
+    })
+
+    // Update tray briefly
+    updateTrayIcon()
+
+  } catch (err) {
+    console.error('[Proactive] handleProactiveTrigger error:', err.message)
+  }
+}
+
+// ── Init proactive engine ─────────────────────────────────────────────────────
+function initProactiveEngine() {
+  proactiveEngine = new ProactiveEngine({ enabled: true })
+
+  proactiveEngine.on('trigger', handleProactiveTrigger)
+
+  proactiveEngine.on('error', err => {
+    console.error('[Proactive] Engine error:', err)
+  })
+
+  proactiveEngine.start()
+  console.log('[NOVA] Proactive engine initialised')
 }
 
 // ── Window ───────────────────────────────────────────────────────────────────
@@ -287,6 +408,8 @@ function rebuildTrayMenu() {
   const inInterview = interviewMode?.active
   const voiceOn = voiceEnabled
 
+  const proactiveOn = proactiveEngine?.getStatus().enabled !== false
+
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open NOVA', click: showWindow },
     { type: 'separator' },
@@ -297,6 +420,13 @@ function rebuildTrayMenu() {
     {
       label: voiceOn ? '🎤 Voice: ON' : '🚫 Voice: OFF',
       click: () => toggleVoice(),
+    },
+    {
+      label: proactiveOn ? '💡 Proactive: ON' : '💡 Proactive: OFF',
+      click: () => {
+        proactiveEngine?.setEnabled(!proactiveEngine.getStatus().enabled)
+        rebuildTrayMenu()
+      },
     },
     { type: 'separator' },
     { label: 'Show in Dock', click: () => { app.dock?.show(); showWindow() } },
@@ -351,6 +481,9 @@ app.whenReady().then(async () => {
 
   // Voice pipeline starts after window is ready
   initVoicePipeline()
+
+  // Proactive engine — NOVA speaks first
+  initProactiveEngine()
 
   // Global shortcuts
   globalShortcut.register('CommandOrControl+Shift+Space', toggleWindow)
@@ -411,3 +544,20 @@ ipcMain.handle('voice:interview-toggle', () => {
 })
 
 ipcMain.handle('voice:interview-status', () => interviewMode?.getStatus())
+
+// ── Proactive IPC ─────────────────────────────────────────────────────────────
+ipcMain.handle('proactive:status', () => proactiveEngine?.getStatus() || { enabled: false })
+ipcMain.handle('proactive:toggle', () => {
+  if (!proactiveEngine) return false
+  const next = !proactiveEngine.getStatus().enabled
+  proactiveEngine.setEnabled(next)
+  rebuildTrayMenu()
+  return next
+})
+ipcMain.handle('proactive:suppress', (e, ms) => {
+  proactiveEngine?.suppress(ms || 5 * 60_000)
+})
+// One-way: renderer tells main "user is active" → suppress proactive chatter
+ipcMain.on('proactive:activity', () => {
+  proactiveEngine?.recordActivity()
+})
