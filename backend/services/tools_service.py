@@ -117,6 +117,23 @@ NOVA_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "youtube_control",
+            "description": "Control YouTube playback in Chrome without touching the keyboard. Use for: skip ad, pause, resume/play, next video, mute, unmute, volume up/down, fullscreen, seek forward/back. Say 'skip' or 'skip ad' → action=skip_ad. Say 'pause' → action=pause. Say 'play' or 'resume' → action=play. Terminal action — call ONCE.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "One of: skip_ad, pause, play, mute, unmute, volume_up, volume_down, fullscreen, seek_forward, seek_back, next"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "gmail_open",
             "description": "Open Gmail in browser. Can open inbox, a specific email, or compose a new email.",
             "parameters": {
@@ -250,6 +267,8 @@ async def execute_tool(tool_name: str, args: dict) -> dict:
             return await tool_browser_read(args["url"], args.get("extract", "main_content"))
         elif tool_name == "youtube_search":
             return await tool_youtube_search(args["query"], args.get("play_best", False))
+        elif tool_name == "youtube_control":
+            return await tool_youtube_control(args["action"])
         elif tool_name == "gmail_open":
             return await tool_gmail_open(args["action"], args.get("query"))
         elif tool_name == "mac_open":
@@ -528,6 +547,95 @@ async def tool_youtube_search(query: str, play_best: bool = True) -> dict:
             "result": f"Opened YouTube search for '{query}'. Done.",
             "url": search_url,
         }
+
+
+async def tool_youtube_control(action: str) -> dict:
+    """
+    Control YouTube playback in Chrome via AppleScript + JS injection.
+    Works even when Chrome is in the background — NOVA controls it without
+    the user switching windows.
+    """
+    action = action.lower().strip()
+
+    # Map spoken words → canonical actions
+    aliases = {
+        "skip": "skip_ad", "skip the ad": "skip_ad", "skip ad": "skip_ad",
+        "resume": "play", "unpause": "play", "continue": "play",
+        "stop": "pause", "quiet": "mute", "silence": "mute",
+        "louder": "volume_up", "quieter": "volume_down", "softer": "volume_down",
+        "forward": "seek_forward", "back": "seek_back", "rewind": "seek_back",
+        "full screen": "fullscreen", "full-screen": "fullscreen",
+    }
+    action = aliases.get(action, action)
+
+    # JS snippets per action
+    JS = {
+        "skip_ad": (
+            "var btn = document.querySelector("
+            "'.ytp-skip-ad-button, .ytp-ad-skip-button, "
+            ".ytp-ad-skip-button-modern, [class*=\"skip-ad\"]');"
+            "if(btn){btn.click();'skipped'}else{'no_ad'}"
+        ),
+        "pause":        "var v=document.querySelector('video');if(v){v.pause();'paused'}else{'no_video'}",
+        "play":         "var v=document.querySelector('video');if(v){v.play();'playing'}else{'no_video'}",
+        "mute":         "var v=document.querySelector('video');if(v){v.muted=true;'muted'}else{'no_video'}",
+        "unmute":       "var v=document.querySelector('video');if(v){v.muted=false;'unmuted'}else{'no_video'}",
+        "volume_up":    "var v=document.querySelector('video');if(v){v.volume=Math.min(1,v.volume+0.2);'vol '+Math.round(v.volume*100)+'%'}else{'no_video'}",
+        "volume_down":  "var v=document.querySelector('video');if(v){v.volume=Math.max(0,v.volume-0.2);'vol '+Math.round(v.volume*100)+'%'}else{'no_video'}",
+        "seek_forward": "var v=document.querySelector('video');if(v){v.currentTime+=10;'fwd 10s'}else{'no_video'}",
+        "seek_back":    "var v=document.querySelector('video');if(v){v.currentTime=Math.max(0,v.currentTime-10);'back 10s'}else{'no_video'}",
+        "fullscreen":   (
+            "var btn=document.querySelector('.ytp-fullscreen-button');"
+            "if(btn){btn.click();'fullscreen'}else{'no_button'}"
+        ),
+        "next": (
+            "var btn=document.querySelector('.ytp-next-button');"
+            "if(btn){btn.click();'next'}else{'no_button'}"
+        ),
+    }
+
+    js = JS.get(action)
+    if not js:
+        return {"success": False, "result": f"Unknown action: {action}. Try: skip_ad, pause, play, mute, volume_up, volume_down, seek_forward, seek_back, fullscreen, next"}
+
+    # Escape for AppleScript string embedding
+    js_escaped = js.replace('\\', '\\\\').replace('"', '\\"')
+
+    applescript = f'''tell application "Google Chrome"
+    if (count of windows) > 0 then
+        set result to execute active tab of front window javascript "{js_escaped}"
+        return result as string
+    else
+        return "Chrome not open"
+    end if
+end tell'''
+
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", applescript],
+            capture_output=True, text=True, timeout=5
+        )
+        raw = (proc.stdout or "").strip()
+
+        if "no_ad" in raw:
+            return {"success": True, "result": "No ad to skip right now."}
+        elif "no_video" in raw:
+            return {"success": False, "result": "No video found in Chrome. Is YouTube open?"}
+        elif "Chrome not open" in raw or proc.returncode != 0:
+            return {"success": False, "result": "Chrome isn't open, Mr. V."}
+        else:
+            labels = {
+                "skip_ad": "Ad skipped.", "pause": "Paused.", "play": "Playing.",
+                "mute": "Muted.", "unmute": "Unmuted.", "fullscreen": "Fullscreen.",
+                "next": "Next video.", "seek_forward": "Jumped forward 10s.",
+                "seek_back": "Jumped back 10s.",
+            }
+            return {"success": True, "result": labels.get(action, "Done.")}
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "result": "Chrome didn't respond in time."}
+    except Exception as e:
+        return {"success": False, "result": f"Browser control failed: {str(e)}"}
 
 
 async def tool_gmail_open(action: str, query: Optional[str] = None) -> dict:
