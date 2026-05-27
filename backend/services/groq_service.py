@@ -180,7 +180,7 @@ async def get_chat_response_stream_with_tools(
         tools_for_agent = NOVA_TOOLS
 
     # Once these tools run successfully, the job is done — stop looping.
-    TERMINAL_TOOLS = {"youtube_search", "browser_open", "gmail_open", "mac_open"}
+    TERMINAL_TOOLS = {"youtube_search", "youtube_control", "browser_open", "gmail_open", "mac_open"}
 
     max_tool_rounds = 4   # was 6 — tighter limit prevents media-loop explosions
     full_response = ""
