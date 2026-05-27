@@ -211,30 +211,74 @@ Return JSON array of facts, no explanation.
 
 ---
 
-## 8. Vision Layer Prompts (Phase C — placeholder)
+## 8. Vision Layer Prompts (Phase C)
 
-To be filled in when Phase C ships. Will include:
-- Sensitive-screen filter prompt (decides whether to capture/redact)
-- Computer-use loop prompt (`given goal + screenshot → next action`)
-- Pattern-trigger prompt
+**File:** `backend/services/vision_service.py`
+
+### 8.1 Computer Use — Next Action
+```
+You are NOVA's vision brain. You see Mr. V's screen.
+Your job: given a GOAL and a SCREENSHOT, decide the single next action.
+
+OUTPUT FORMAT — JSON only, no prose:
+{ "action": "click"|"type"|"scroll"|"press"|"done"|"stuck",
+  "x": int, "y": int,   // for click only
+  "text": str,           // for type/press
+  "direction": "up"|"down",  // for scroll
+  "reason": str }
+
+RULES:
+- "done" if the goal is complete.
+- "stuck" if you cannot proceed.
+- Never invent coordinates.
+- If payment/password/SSN field visible → "stuck" with reason "sensitive page".
+```
+
+### 8.2 Passive Watcher — Tier-1 Situation Detection
+```
+Look at this screenshot. Identify if any Tier-1 situations are present:
+- Cookie consent / GDPR banner with Accept/Dismiss button
+- Browser notification permission popup
+- Software update dialog (not system-level)
+- "Save password?" browser prompt
+- Advertisement overlay with clear close button
+
+OUTPUT: JSON { "action_needed": bool, "situation": str,
+               "element_text": str, "confidence": 0.0-1.0 }
+
+If confidence < 0.8 → action_needed: false. When in doubt — do nothing.
+```
+
+**Privacy rules (enforced before any prompt is sent):**
+- Sensitive screen detected → no screenshot taken, no API call
+- Privacy mode ON → no screenshots ever
+- Both checked per-tick, before every API call
 
 ---
 
-## 9. Pattern Learning Prompts (Phase B — placeholder)
+## 9. Pattern Learning Prompts (Phase B)
 
-To be filled in when Phase B ships. Will include:
-- Pattern-suggestion prompt
-- "Should this become a rule?" classification prompt
+No LLM prompts used in Phase B. Pattern detection is pure Python:
+- observation count ≥ SUGGEST_THRESHOLD (5) → create suggested rule
+- Classification reuses `security_classifier.classify_action()`
+- Rules context injected into system prompt (Section 1) as plain text
 
 ---
 
-## 10. First-Day Interview Prompts (Phase D — placeholder)
+## 10. First-Day Interview (Phase D)
 
-To be filled in when Phase D ships.
+No LLM prompts. The interview is a pure React form.
+Answers are converted to:
+- Active pattern rules (seeded directly without threshold)
+- Memory facts (via `upsert_fact`)
+- Security domain additions
+- Privacy mode toggle
 
 ---
 
 ## Change Log
 
-- **2026-05-27** — Phase A built. Added `browser_action` tool description,
-  security classifier rules, ad-watcher JS, DOM snapshot JS.
+- **2026-05-27** — Phase A: browser_action, security classifier, ad-watcher JS
+- **2026-05-27** — Phase B: pattern learning (no new prompts)
+- **2026-05-27** — Phase C: vision layer — computer-use prompt, passive-watcher prompt
+- **2026-05-27** — Phase D: first-day interview (no new prompts)

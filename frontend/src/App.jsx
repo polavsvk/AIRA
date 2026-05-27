@@ -6,21 +6,28 @@ import WeatherWidget from './components/WeatherWidget'
 import NewsWidget from './components/NewsWidget'
 import TaskManager from './components/TaskManager'
 import DailyBriefing from './components/DailyBriefing'
+import FirstDayInterview from './components/FirstDayInterview'
 import axios from 'axios'
 
 export default function App() {
   const [isOnline, setIsOnline] = useState(false)
   const [showBriefing, setShowBriefing] = useState(false)
+  const [showInterview, setShowInterview] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [pendingChatMessage, setPendingChatMessage] = useState(null)
   const chatRef = useRef(null)
 
-  // Check backend health
+  // Check backend health + first-launch onboarding check
   useEffect(() => {
     const checkHealth = async () => {
       try {
         await axios.get('/api/health')
         setIsOnline(true)
+        // Phase D — show interview on first launch
+        const ob = await axios.get('/api/onboarding/status')
+        if (!ob.data?.completed) {
+          setShowInterview(true)
+        }
       } catch {
         setIsOnline(false)
       }
@@ -102,6 +109,13 @@ export default function App() {
         <DailyBriefing
           onClose={() => setShowBriefing(false)}
           onSendToChat={handleBriefingToChat}
+        />
+      )}
+
+      {/* Phase D — First Day Interview (shows once on first launch) */}
+      {showInterview && (
+        <FirstDayInterview
+          onComplete={() => setShowInterview(false)}
         />
       )}
     </div>
