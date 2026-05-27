@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 
 from .tools_service import NOVA_TOOLS, execute_tool, tool_file_write_confirmed
+from .browser_action import browser_action_confirmed
 from .memory_service import get_memory_context, extract_facts_from_conversation
 from .screen_service import analyze_screen
 from agents.definitions import get_agent_system_addon
@@ -180,7 +181,10 @@ async def get_chat_response_stream_with_tools(
         tools_for_agent = NOVA_TOOLS
 
     # Once these tools run successfully, the job is done — stop looping.
-    TERMINAL_TOOLS = {"youtube_search", "youtube_control", "browser_open", "gmail_open", "mac_open"}
+    TERMINAL_TOOLS = {
+        "youtube_search", "youtube_control", "browser_open", "gmail_open", "mac_open",
+        "browser_action",
+    }
 
     max_tool_rounds = 4   # was 6 — tighter limit prevents media-loop explosions
     full_response = ""
@@ -421,6 +425,9 @@ async def confirm_action(confirmation_id: str) -> dict:
 
     if tool_name == "file_write":
         return await tool_file_write_confirmed(data["path"], data["content"])
+
+    if tool_name == "browser_action":
+        return await browser_action_confirmed(data)
 
     return {"success": False, "result": f"No confirmation handler for: {tool_name}"}
 

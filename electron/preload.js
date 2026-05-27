@@ -37,6 +37,16 @@ contextBridge.exposeInMainWorld('nova', {
     onError:           (cb) => _subscribe('voice:error', cb),
     onNotInstalled:    (cb) => _subscribe('voice:not-installed', cb),
   },
+
+  // ── Ad Watcher API — background YouTube ad killer (Phase A) ──────────────
+  adWatcher: {
+    getStatus: () => ipcRenderer.invoke('adwatcher:status'),
+    toggle:    () => ipcRenderer.invoke('adwatcher:toggle'),
+    enable:    () => ipcRenderer.invoke('adwatcher:enable'),
+    disable:   () => ipcRenderer.invoke('adwatcher:disable'),
+    onSkipped: (cb) => _subscribe('adwatcher:skipped', cb),
+    onState:   (cb) => _subscribe('adwatcher:state',   cb),
+  },
 })
 
 function _subscribe(channel, callback) {

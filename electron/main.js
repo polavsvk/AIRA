@@ -16,6 +16,7 @@ const http = require('http')
 const { WakeEngine, STATE: VOICE_STATE } = require('./voice/wake-engine')
 const { TTS } = require('./voice/tts')
 const { InterviewMode } = require('./voice/interview-mode')
+const { AdWatcher } = require('./watchers/ad-watcher')
 
 let mainWindow = null
 let tray = null
@@ -26,6 +27,9 @@ let wakeEngine = null
 let tts = null
 let interviewMode = null
 let voiceEnabled = true
+
+let adWatcher = null
+let adWatcherEnabled = true   // default ON — JARSON skips ads automatically
 
 const BACKEND_PORT = 8000
 const DEV_FRONTEND_URL = `http://localhost:5173`
@@ -298,6 +302,16 @@ function rebuildTrayMenu() {
       label: voiceOn ? '🎤 Voice: ON' : '🚫 Voice: OFF',
       click: () => toggleVoice(),
     },
+    {
+      label: (adWatcher?.enabled ? '🛡  Ad Skip: ON' : '🛡  Ad Skip: OFF') +
+             `  (${adWatcher?.getStatus().skipped || 0} skipped)`,
+      click: () => {
+        if (!adWatcher) return
+        if (adWatcher.enabled) adWatcher.stop(); else adWatcher.start()
+        adWatcherEnabled = adWatcher.enabled
+        rebuildTrayMenu()
+      },
+    },
     { type: 'separator' },
     { label: 'Show in Dock', click: () => { app.dock?.show(); showWindow() } },
     { type: 'separator' },
@@ -352,6 +366,15 @@ app.whenReady().then(async () => {
   // Voice pipeline starts after window is ready
   initVoicePipeline()
 
+  // Ad watcher — always-on background YouTube ad killer
+  adWatcher = new AdWatcher({ intervalMs: 2000, idleIntervalMs: 10000 })
+  adWatcher.on('skipped', ({ count }) => {
+    console.log(`[AdWatcher] Ad skipped (total: ${count})`)
+    mainWindow?.webContents.send('adwatcher:skipped', { count })
+  })
+  adWatcher.on('state', s => mainWindow?.webContents.send('adwatcher:state', s))
+  if (adWatcherEnabled) adWatcher.start()
+
   // Global shortcuts
   globalShortcut.register('CommandOrControl+Shift+Space', toggleWindow)
   globalShortcut.register('CommandOrControl+Shift+M', () => {
@@ -373,6 +396,7 @@ app.on('before-quit', () => {
   isQuitting = true
   globalShortcut.unregisterAll()
   stopVoicePipeline()
+  adWatcher?.stop()
   stopBackend()
 })
 
@@ -411,3 +435,14 @@ ipcMain.handle('voice:interview-toggle', () => {
 })
 
 ipcMain.handle('voice:interview-status', () => interviewMode?.getStatus())
+
+// ── Ad Watcher IPC ───────────────────────────────────────────────────────────
+ipcMain.handle('adwatcher:status', () => adWatcher?.getStatus() || { enabled: false, skipped: 0 })
+ipcMain.handle('adwatcher:toggle', () => {
+  if (!adWatcher) return { enabled: false }
+  if (adWatcher.enabled) adWatcher.stop(); else adWatcher.start()
+  adWatcherEnabled = adWatcher.enabled
+  return adWatcher.getStatus()
+})
+ipcMain.handle('adwatcher:enable',  () => { adWatcher?.start();  adWatcherEnabled = true;  return adWatcher?.getStatus() })
+ipcMain.handle('adwatcher:disable', () => { adWatcher?.stop();   adWatcherEnabled = false; return adWatcher?.getStatus() })

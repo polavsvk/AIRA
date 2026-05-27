@@ -109,6 +109,8 @@ TOOL_TO_AGENT = {
     "file_write": "ATLAS",
     "file_list": "ATLAS",
     "browser_open": "HERMES",
+    "browser_action": "HERMES",
+    "youtube_control": "HERMES",
     "browser_read": "ORACLE",
     "youtube_search": "HERMES",
     "gmail_open": "HERMES",
@@ -125,19 +127,22 @@ TOOL_TO_AGENT = {
 AGENT_TOOLS = {
     "NOVA": [
         "file_read", "file_write", "file_list",
-        "browser_open", "browser_read", "youtube_search", "gmail_open",
+        "browser_open", "browser_action", "browser_read",
+        "youtube_search", "youtube_control", "gmail_open",
         "mac_open", "web_search", "screen_read",
         "get_agent_status", "spawn_mark_agent", "kill_mark_agent",
     ],
     "ATLAS": ["file_read", "file_write", "file_list"],
-    "HERMES": ["browser_open", "browser_read", "youtube_search", "gmail_open"],
+    "HERMES": ["browser_open", "browser_action", "browser_read",
+               "youtube_search", "youtube_control", "gmail_open"],
     "ORACLE": ["web_search", "browser_read"],
     "TITAN": ["mac_open", "screen_read"],
     "AEGIS": [],   # direct service call — no LLM tools needed
     "HERALD": [],  # direct service call — no LLM tools needed
     "MARK": [      # MARK gets full toolkit like NOVA
         "file_read", "file_write", "file_list",
-        "browser_open", "browser_read", "youtube_search", "gmail_open",
+        "browser_open", "browser_action", "browser_read",
+        "youtube_search", "youtube_control", "gmail_open",
         "mac_open", "web_search", "screen_read",
     ],
 }

@@ -102,6 +102,47 @@ NOVA_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "browser_action",
+            "description": (
+                "Full Chrome control — do anything Mr. V can do in the browser. "
+                "Use this for ALL browser interaction beyond just opening a URL. "
+                "Reads the page's DOM intelligently, classifies safety, and acts. "
+                "Sensitive actions (submit, send, pay, apply, delete, login) "
+                "ALWAYS trigger a confirmation gate first — never bypass."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": (
+                            "navigate | new_tab | close_tab | switch_tab | "
+                            "click_link | click_element | type | press | "
+                            "scroll_up | scroll_down | go_back | go_forward | "
+                            "get_links | get_dom | address_bar | "
+                            "skip_ad | dismiss_banners"
+                        ),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "URL, search query, link/button text, or key combo (e.g. 'cmd+t')",
+                    },
+                    "index": {
+                        "type": "integer",
+                        "description": "1-based index for click_link (e.g. 'open the 3rd link') or switch_tab",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type (for type/address_bar actions)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "youtube_search",
             "description": "Play a video or song on YouTube. Opens the best matching video directly and starts playing it. This is a terminal action — call it ONCE and it is done. Do NOT call it again after success.",
             "parameters": {
@@ -244,7 +285,8 @@ NOVA_TOOLS = [
 
 # ─── SENSITIVE ACTIONS — require Mr. V's confirmation before executing ───────────
 
-SENSITIVE_ACTIONS = {"file_write", "file_delete", "gmail_send", "mac_run_command"}
+SENSITIVE_ACTIONS = {"file_write", "file_delete", "gmail_send", "mac_run_command",
+                     "browser_action"}  # tier-classified at runtime
 
 
 # ─── TOOL EXECUTOR DISPATCHER ───────────────────────────────────────────────────
@@ -263,6 +305,14 @@ async def execute_tool(tool_name: str, args: dict) -> dict:
             return await tool_file_list(args["directory"], args.get("pattern"))
         elif tool_name == "browser_open":
             return await tool_browser_open(args["url"], args.get("browser", "chrome"))
+        elif tool_name == "browser_action":
+            from .browser_action import browser_action
+            return await browser_action(
+                action=args["action"],
+                target=args.get("target"),
+                index=args.get("index"),
+                text=args.get("text"),
+            )
         elif tool_name == "browser_read":
             return await tool_browser_read(args["url"], args.get("extract", "main_content"))
         elif tool_name == "youtube_search":
