@@ -197,10 +197,16 @@ async def get_chat_response_stream_with_tools(
     if not tools_for_agent:
         tools_for_agent = NOVA_TOOLS
 
-    max_tool_rounds = 6
+    # Once these tools run successfully, the job is done — stop looping.
+    TERMINAL_TOOLS = {"youtube_search", "browser_open", "gmail_open", "mac_open"}
+
+    max_tool_rounds = 4   # was 6 — tighter limit prevents media-loop explosions
     full_response = ""
+    terminal_hit = False
 
     for _ in range(max_tool_rounds):
+        if terminal_hit:
+            break
         try:
             response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
@@ -382,6 +388,17 @@ async def get_chat_response_stream_with_tools(
                         "tool_call_id": tc.id,
                         "content": result_str,
                     })
+
+                    # Terminal tools: job is done — no further LLM rounds needed
+                    if tool_name in TERMINAL_TOOLS and result.get("success"):
+                        terminal_hit = True
+
+            if terminal_hit:
+                # Emit a clean one-line ack and stop — don't loop back to LLM
+                ack = "Done."
+                yield {"type": "token", "content": ack}
+                yield {"type": "done", "full_content": ack, "agent": agent_name}
+                return
 
             continue  # Next LLM turn
 
