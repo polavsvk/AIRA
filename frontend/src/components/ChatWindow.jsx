@@ -4,10 +4,11 @@ import {
   Volume2, VolumeX, Radio, Globe, FileText,
   CheckCircle, XCircle, Loader, AlertTriangle,
   Brain, Monitor, Users, ChevronDown, ChevronUp,
-  Activity, Phone, ShieldAlert,
+  Activity, Phone, ShieldAlert, Sparkles,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
+import PatternManager from './PatternManager'
 
 // ─── Session ID ───────────────────────────────────────────────────────────────
 
@@ -382,6 +383,9 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
   const [copied, setCopied] = useState(false)
   const [greetingLoaded, setGreetingLoaded] = useState(false)
   const [showAgentPanel, setShowAgentPanel] = useState(false)
+  const [showPatternManager, setShowPatternManager] = useState(false)
+  const [pendingSuggestions, setPendingSuggestions] = useState(0)
+  const [adSkipCount, setAdSkipCount] = useState(0)
 
   // Voice state — driven entirely by Electron IPC
   const [voiceEnabled, setVoiceEnabled] = useState(true)
@@ -467,7 +471,16 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
       window.nova.voice.onNotInstalled(() => setVoiceInstalled(false)),
 
       window.nova.voice.onError(err => console.error('[NOVA voice]', err)),
+
+      // Phase B — ad-watcher skip counter
+      window.nova?.adWatcher?.onSkipped(({ count }) => setAdSkipCount(count)),
     ]
+
+    // Fetch initial pending suggestion count
+    fetch('http://localhost:8000/api/patterns/status')
+      .then(r => r.json())
+      .then(s => setPendingSuggestions(s.suggested_count || 0))
+      .catch(() => {})
 
     return () => { unsubs.forEach(u => u && u()) }
   }, [])
@@ -645,6 +658,9 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
                   : t
               )
               setStreamingTools([...currentToolEvents])
+            } else if (ev.type === 'pattern_suggestion') {
+              // New habit rule suggested — show badge on Habit Memory button
+              setPendingSuggestions(ev.rules?.length || 0)
             } else if (ev.type === 'confirmation_needed') {
               const confEv = {
                 type: 'confirmation_needed',
@@ -812,6 +828,32 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           </div>
 
           <div className="h-4 w-px bg-aira-border" />
+
+          {/* Phase B — Habit Memory button */}
+          <button
+            onClick={() => setShowPatternManager(true)}
+            title="Habit memory — learned patterns"
+            className="relative flex items-center gap-1 text-xs text-aira-text-dim/70 hover:text-sky-400 transition-colors"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span className="font-mono">HABITS</span>
+            {pendingSuggestions > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-sky-500 text-white text-[9px] flex items-center justify-center font-bold">
+                {pendingSuggestions}
+              </span>
+            )}
+          </button>
+
+          {adSkipCount > 0 && (
+            <>
+              <div className="h-4 w-px bg-aira-border" />
+              <span className="text-xs text-emerald-500/70 font-mono" title="Ads skipped by NOVA today">
+                🛡 {adSkipCount}
+              </span>
+            </>
+          )}
+
+          <div className="h-4 w-px bg-aira-border" />
           <div className="flex items-center gap-1 text-xs text-aira-text-dim/50 font-mono" title="Memory active">
             <Brain className="w-3 h-3 text-aira-blue/50" /><span>MEM</span>
           </div>
@@ -947,6 +989,11 @@ export default function ChatWindow({ pendingMessage, onPendingMessageSent }) {
           NOVA · 7-Agent Fleet · whisper.cpp local voice · Samantha TTS · Cmd+Shift+M for Interview Mode
         </p>
       </div>
+
+      {/* Phase B — Habit Memory Manager modal */}
+      {showPatternManager && (
+        <PatternManager onClose={() => { setShowPatternManager(false); setPendingSuggestions(0) }} />
+      )}
     </div>
   )
 }

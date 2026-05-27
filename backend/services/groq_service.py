@@ -17,6 +17,7 @@ from datetime import datetime
 from .tools_service import NOVA_TOOLS, execute_tool, tool_file_write_confirmed
 from .browser_action import browser_action_confirmed
 from .memory_service import get_memory_context, extract_facts_from_conversation
+from .pattern_service import record_observation, get_rules_context, freeze, is_frozen
 from .screen_service import analyze_screen
 from agents.definitions import get_agent_system_addon
 from agents.router import get_agent_tools
@@ -125,6 +126,15 @@ def _build_system_message(agent_name: str = "NOVA", mark_task: str = None) -> st
     if memory_ctx:
         time_ctx += f"\n\n{memory_ctx}"
 
+    # Inject active pattern rules (Phase B — learned habits)
+    rules_ctx = get_rules_context()
+    if rules_ctx:
+        time_ctx += f"\n\n{rules_ctx}"
+
+    # Inject freeze notice if active
+    if is_frozen():
+        time_ctx += "\n\n⚠️ NOVA automation is FROZEN. Do NOT auto-execute any patterns. Ask Mr. V before any action."
+
     # Agent specialisation addon
     agent_addon = get_agent_system_addon(agent_name, mark_task)
 
@@ -162,6 +172,23 @@ async def get_chat_response_stream_with_tools(
     if not client:
         yield {"type": "token", "content": "GROQ_API_KEY not configured, Mr. V."}
         yield {"type": "done", "full_content": "", "agent": agent_name}
+        return
+
+    # ── Phase B: voice freeze/unfreeze commands ───────────────────────────────
+    msg_lower = message.strip().lower()
+    if any(p in msg_lower for p in ["nova freeze", "freeze nova", "pause automation", "stop automation"]):
+        from .pattern_service import freeze
+        freeze()
+        ack = "Automation frozen. I'll ask before doing anything, Mr. V."
+        yield {"type": "token", "content": ack}
+        yield {"type": "done", "full_content": ack, "agent": agent_name}
+        return
+    if any(p in msg_lower for p in ["nova unfreeze", "resume automation", "unfreeze nova", "start automation"]):
+        from .pattern_service import unfreeze
+        unfreeze()
+        ack = "Automation back on, Mr. V."
+        yield {"type": "token", "content": ack}
+        yield {"type": "done", "full_content": ack, "agent": agent_name}
         return
 
     # Emit which agent is handling this request
@@ -374,6 +401,26 @@ async def get_chat_response_stream_with_tools(
                         "tool_call_id": tc.id,
                         "content": result_str,
                     })
+
+                    # Phase B — record observation for pattern learning
+                    if result.get("success"):
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                record_observation,
+                                tool_name, args,
+                                (args or {}).get("url", ""),
+                                (args or {}).get("target_label", ""),
+                            )
+                        )
+
+                        # Check if suggested rules need to surface
+                        from .pattern_service import get_suggested_rules
+                        new_suggestions = get_suggested_rules()
+                        if new_suggestions:
+                            yield {
+                                "type": "pattern_suggestion",
+                                "rules": new_suggestions,
+                            }
 
                     # Terminal tools: job is done — no further LLM rounds needed
                     if tool_name in TERMINAL_TOOLS and result.get("success"):
