@@ -8,10 +8,13 @@ import subprocess
 import glob
 import json
 import asyncio
+import logging
 import webbrowser
 from pathlib import Path
 from typing import Optional
 import httpx
+
+log = logging.getLogger("nova.tools")
 
 # Try to import playwright - graceful fallback if not installed
 try:
@@ -205,6 +208,35 @@ NOVA_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "computer_use",
+            "description": (
+                "Phase C — Vision-based computer control for native Mac apps "
+                "(anything outside Chrome). Takes a screenshot, sends it to "
+                "Groq vision, decides the next click/type action, executes it, "
+                "repeats until the goal is done. "
+                "Use ONLY when browser_action cannot reach the target "
+                "(e.g. Finder, Spotify desktop, native dialogs). "
+                "Privacy filter blocks execution on sensitive screens automatically."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "What to accomplish — plain English. E.g. 'Open the Downloads folder in Finder'"
+                    },
+                    "max_steps": {
+                        "type": "integer",
+                        "description": "Max action steps before giving up. Default 8."
+                    }
+                },
+                "required": ["goal"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": "Search the web using Google and return results",
             "parameters": {
@@ -313,6 +345,8 @@ async def execute_tool(tool_name: str, args: dict) -> dict:
                 index=args.get("index"),
                 text=args.get("text"),
             )
+        elif tool_name == "computer_use":
+            return await tool_computer_use(args["goal"], args.get("max_steps", 8))
         elif tool_name == "browser_read":
             return await tool_browser_read(args["url"], args.get("extract", "main_content"))
         elif tool_name == "youtube_search":
@@ -794,3 +828,140 @@ async def tool_web_search(query: str, num_results: int = 5) -> dict:
 
     except Exception as e:
         return {"success": False, "result": f"Search failed: {str(e)}"}
+
+
+async def tool_computer_use(goal: str, max_steps: int = 8) -> dict:
+    """
+    Phase C — Vision-based computer control loop.
+    Screenshot → Groq vision → decide next action → execute → repeat.
+    Runs until done, stuck, or max_steps exceeded.
+
+    Privacy: capture_screenshot() checks sensitive-screen filter before
+    every step. If screen becomes sensitive mid-task, loop stops.
+    """
+    try:
+        from .vision_service import capture_screenshot, computer_use_next_action, is_screen_sensitive
+        from .security_classifier import classify_action, TIER_2
+        from .audit_log import log_intent, log_result
+    except ImportError as e:
+        return {"success": False, "result": f"Vision service not available: {e}"}
+
+    steps_taken = []
+
+    for step_num in range(1, max_steps + 1):
+        # Privacy check before EVERY step
+        sensitivity = is_screen_sensitive()
+        if not sensitivity["safe"]:
+            return {
+                "success": False,
+                "result": f"Stopped at step {step_num}: sensitive screen detected ({sensitivity['reason']}). Mr. V, please continue manually.",
+                "steps": steps_taken,
+            }
+
+        b64 = capture_screenshot()
+        if not b64:
+            return {
+                "success": False,
+                "result": f"Stopped at step {step_num}: could not capture screen.",
+                "steps": steps_taken,
+            }
+
+        # Ask vision model what to do next
+        action_plan = await computer_use_next_action(goal, b64)
+        action = action_plan.get("action")
+        reason = action_plan.get("reason", "")
+
+        steps_taken.append({"step": step_num, "action": action, "reason": reason})
+
+        if action == "done":
+            return {
+                "success": True,
+                "result": f"Done in {step_num} steps. {reason}",
+                "steps": steps_taken,
+            }
+
+        if action == "stuck":
+            return {
+                "success": False,
+                "result": f"Stuck at step {step_num}: {reason}. Mr. V, I need your help here.",
+                "steps": steps_taken,
+            }
+
+        # Execute the action
+        if action == "click":
+            x, y = action_plan.get("x"), action_plan.get("y")
+            if x is None or y is None:
+                return {"success": False, "result": "Vision returned click with no coordinates.", "steps": steps_taken}
+
+            # Security: classify the click
+            intent_id = log_intent(action="computer_use_click", tier=1, payload={"x": x, "y": y, "goal": goal})
+            ok = _cliclick(f"c:{x},{y}")
+            log_result(intent_id, outcome="success" if ok else "failure")
+
+        elif action == "type":
+            text = action_plan.get("text", "")
+            intent_id = log_intent(action="computer_use_type", tier=1, payload={"text_len": len(text), "goal": goal})
+            ok = _type_text(text)
+            log_result(intent_id, outcome="success" if ok else "failure")
+
+        elif action == "press":
+            key = action_plan.get("text", "enter")
+            intent_id = log_intent(action="computer_use_press", tier=1, payload={"key": key})
+            ok = _press_key(key)
+            log_result(intent_id, outcome="success" if ok else "failure")
+
+        elif action == "scroll":
+            direction = action_plan.get("direction", "down")
+            intent_id = log_intent(action="computer_use_scroll", tier=1, payload={"direction": direction})
+            ok = _cliclick(f"kd:{'down' if direction == 'down' else 'up'}")
+            log_result(intent_id, outcome="success" if ok else "failure")
+
+        else:
+            return {"success": False, "result": f"Unknown action from vision: {action}", "steps": steps_taken}
+
+        # Small pause — let UI update before next screenshot
+        await asyncio.sleep(0.6)
+
+    return {
+        "success": False,
+        "result": f"Reached {max_steps}-step limit. Goal may be incomplete. Last steps: {steps_taken[-2:]}",
+        "steps": steps_taken,
+    }
+
+
+def _cliclick(cmd: str) -> bool:
+    """Run cliclick for mouse actions. Requires: brew install cliclick"""
+    try:
+        r = subprocess.run(["cliclick", cmd], capture_output=True, timeout=3)
+        return r.returncode == 0
+    except FileNotFoundError:
+        log.warning("cliclick not installed — run: brew install cliclick")
+        return False
+    except Exception as e:
+        log.error(f"cliclick error: {e}")
+        return False
+
+
+def _type_text(text: str) -> bool:
+    """Type text into the currently focused element via cliclick."""
+    try:
+        r = subprocess.run(["cliclick", f"t:{text}"], capture_output=True, timeout=5)
+        return r.returncode == 0
+    except FileNotFoundError:
+        # Fallback to osascript
+        safe = text.replace('"', '\\"')
+        r = subprocess.run(
+            ["osascript", "-e",
+             f'tell application "System Events" to keystroke "{safe}"'],
+            capture_output=True, timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _press_key(key: str) -> bool:
+    """Press a key by name."""
+    from .browser_action import _press_keys
+    r = _press_keys(key)
+    return r.get("ok", False)

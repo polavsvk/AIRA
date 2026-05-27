@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_tables
-from routes import chat, weather, news, tasks, memory, agents, patterns
+from routes import chat, weather, news, tasks, memory, agents, patterns, vision
 
 app = FastAPI(
     title="NOVA API",
@@ -22,6 +22,15 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     create_tables()
+    # Phase C — start screen watcher
+    from services.screen_watcher import start as watcher_start
+    watcher_start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    from services.screen_watcher import stop as watcher_stop
+    watcher_stop()
 
 # Register routes
 app.include_router(chat.router)
@@ -31,6 +40,7 @@ app.include_router(tasks.router)
 app.include_router(memory.router)
 app.include_router(agents.router)
 app.include_router(patterns.router)
+app.include_router(vision.router)
 
 
 @app.get("/")
