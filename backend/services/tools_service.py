@@ -103,12 +103,12 @@ NOVA_TOOLS = [
         "type": "function",
         "function": {
             "name": "youtube_search",
-            "description": "Search YouTube for a video or song. Returns list of results with titles and channels.",
+            "description": "Play a video or song on YouTube. Opens the best matching video directly and starts playing it. This is a terminal action — call it ONCE and it is done. Do NOT call it again after success.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "play_best": {"type": "boolean", "description": "If true and match is obvious, play directly without listing"}
+                    "query": {"type": "string", "description": "Search query — song name, artist, video title"},
+                    "play_best": {"type": "boolean", "description": "Always true — always plays the best match directly"}
                 },
                 "required": ["query"]
             }
@@ -476,57 +476,58 @@ async def tool_browser_read(url: str, extract: str = "main_content") -> dict:
             return {"success": False, "result": f"Could not read page: {str(e)}"}
 
 
-async def tool_youtube_search(query: str, play_best: bool = False) -> dict:
+async def tool_youtube_search(query: str, play_best: bool = True) -> dict:
     """
-    Open YouTube in Chrome with the search query.
-    Uses Chrome directly with the user's existing session — no scraping, no bot errors.
-    For music/songs, opens YouTube Music (better for audio).
+    Play a YouTube video directly.
+    Strategy:
+      1. Fetch YouTube search results page, extract first videoId from embedded JSON.
+      2. Open youtube.com/watch?v=ID&autoplay=1 — starts playing immediately.
+      3. Fallback: open search results page if extraction fails.
+    Always uses regular YouTube (not YouTube Music) so autoplay works.
     """
+    import re
     from urllib.parse import quote_plus
+
     encoded = quote_plus(query)
+    search_url = f"https://www.youtube.com/results?search_query={encoded}"
 
-    # Detect if this is a music/song request
-    music_hints = ['song', 'music', 'album', 'audio', 'lyrics', 'remix',
-                   'ft.', 'feat', 'track', 'official audio', 'bollywood',
-                   'playlist', 'lofi', 'instrumental']
-    is_music = play_best or any(k in query.lower() for k in music_hints)
-
-    if is_music:
-        # YouTube Music — far better for songs, shows results cleanly
-        url = f"https://music.youtube.com/search?q={encoded}"
-        label = "YouTube Music"
-    else:
-        # Regular YouTube search
-        url = f"https://www.youtube.com/results?search_query={encoded}"
-        label = "YouTube"
-
-    await tool_browser_open(url, "chrome")
-    return {
-        "success": True,
-        "result": f"Opened {label} in Chrome searching for: {query}. Click the top result to play.",
-        "url": url
-    }
-
-
-async def _tool_youtube_search_OLD(query: str, play_best: bool = False) -> dict:
-    """Old scraping approach — kept for reference but not used (YouTube blocks bots)."""
-    search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
+    video_id = None
     try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            resp = await client.get(search_url, headers=headers)
+            html = resp.text
 
-        result_text = "\n".join(
-            [f"{i + 1}. {r['title']} — {r['channel']}" for i, r in enumerate(results)]
-        )
+        # YouTube embeds all search results as JSON in the page — pull the first videoId
+        ids = re.findall(r'"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"', html)
+        if ids:
+            video_id = ids[0]
+    except Exception:
+        pass
+
+    if video_id:
+        watch_url = f"https://www.youtube.com/watch?v={video_id}&autoplay=1"
+        await tool_browser_open(watch_url, "chrome")
         return {
             "success": True,
-            "result": result_text,
-            "results": results,
-            "search_url": search_url
+            "result": f"Playing '{query}' on YouTube. Done.",
+            "url": watch_url,
         }
-
-    except Exception as e:
-        # Fallback: open YouTube search in browser
+    else:
+        # Fallback — open search results, user clicks once
         await tool_browser_open(search_url, "chrome")
-        return {"success": True, "result": f"Opened YouTube search for: {query}"}
+        return {
+            "success": True,
+            "result": f"Opened YouTube search for '{query}'. Done.",
+            "url": search_url,
+        }
 
 
 async def tool_gmail_open(action: str, query: Optional[str] = None) -> dict:
