@@ -273,7 +273,10 @@ class WakeEngine extends EventEmitter {
     this.commandText = ''
     console.log(`[WakeEngine] Command finalized (${reason}):`, cmd || '(empty)')
 
-    if (cmd && cmd.length >= 2) {
+    // Strip whisper's punctuation-only output. Silence transcribes as ". . ."
+    // or "..." which slips past a length check and triggers LLM hallucinations.
+    const wordChars = cmd.replace(/[^a-zA-Z0-9]/g, '')
+    if (cmd && wordChars.length >= 2) {
       this.emit('command', cmd)
     } else {
       this.emit('command-empty')
