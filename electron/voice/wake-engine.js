@@ -17,14 +17,20 @@ const os = require('os')
 // ── Paths ────────────────────────────────────────────────────────────────────
 const NOVA_HOME   = path.join(os.homedir(), '.nova')
 const WHISPER_DIR = path.join(NOVA_HOME, 'whisper.cpp')
-// Newer whisper.cpp (CMake builds) puts binaries in build/bin/
-// Fall back to root-level `stream` for older builds
+// whisper.cpp renamed `stream` → `whisper-stream` in 2024. The old name still
+// exists as a deprecation stub that prints a warning and exits 1, so we must
+// prefer `whisper-stream` when present.
 const WHISPER_BIN = (() => {
-  const cmakeBin = path.join(WHISPER_DIR, 'build', 'bin', 'stream')
-  const oldBin   = path.join(WHISPER_DIR, 'stream')
-  if (fs.existsSync(cmakeBin)) return cmakeBin
-  if (fs.existsSync(oldBin))   return oldBin
-  return cmakeBin  // default to cmake path (shows correct error)
+  const candidates = [
+    path.join(WHISPER_DIR, 'build', 'bin', 'whisper-stream'),
+    path.join(WHISPER_DIR, 'build', 'bin', 'stream'),
+    path.join(WHISPER_DIR, 'whisper-stream'),
+    path.join(WHISPER_DIR, 'stream'),
+  ]
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p
+  }
+  return candidates[0]  // default to new name (shows correct error if missing)
 })()
 const MODEL_PATH  = path.join(WHISPER_DIR, 'models', 'ggml-base.en.bin')
 
