@@ -98,9 +98,10 @@ class WakeEngine extends EventEmitter {
 
     this.shouldBeRunning = true
 
-    // Audio device index. Default 1 because on macOS with Continuity, device 0
-    // is often the iPhone mic. Override via NOVA_MIC_DEVICE env var.
-    const micDevice = process.env.NOVA_MIC_DEVICE ?? '1'
+    // Audio device index. 0 = default capture device. If macOS Continuity is
+    // on, device 0 may be the iPhone mic — override via NOVA_MIC_DEVICE env
+    // var (run whisper-stream once to see the device list).
+    const micDevice = process.env.NOVA_MIC_DEVICE ?? '0'
 
     const args = [
       '-m', MODEL_PATH,
