@@ -36,11 +36,13 @@ const MODEL_PATH  = path.join(WHISPER_DIR, 'models', 'ggml-base.en.bin')
 
 // ── Wake phrase detection ────────────────────────────────────────────────────
 // Require "hey nova" or similar — bare "nova" causes too many false positives.
+// The base.en whisper model often mishears "Nova" as Nora/Noah/Nala/Noma/Nava,
+// or merges "hey nova" into a single token like "henoa"/"henova". Accept all.
+const NOVA_VARIANTS = '(?:nova|nora|noah|noma|nava|noha|nada|nala|knowa|nover|noba)'
 const WAKE_PATTERNS = [
-  /\bhey\s+nova\b/i,
-  /\bhi\s+nova\b/i,
-  /\bok(?:ay)?\s+nova\b/i,
-  /\byo\s+nova\b/i,
+  new RegExp(`\\b(?:hey|hi|ok(?:ay)?|yo|a|hay)\\s+${NOVA_VARIANTS}\\b`, 'i'),
+  // Merged forms whisper emits when said quickly: "henova", "henoa", "henoah"
+  /\bh[ae]y?[\s-]*n[oa][vbhrm]?[aoeu]h?\b/i,
 ]
 
 // Strip whisper's own status output from the audio stream
