@@ -206,8 +206,10 @@ class WakeEngine extends EventEmitter {
       // Filter out whisper's own logging
       if (NOISE_PATTERNS.some(p => p.test(line))) continue
 
-      // The actual transcription text — cleaned up
-      const text = line.replace(/^\s*\[?[^]]*\]?\s*/, '').trim()
+      // Strip whisper's [hh:mm:ss --> hh:mm:ss] timestamp prefix if present.
+      // (The previous pattern /[^]]*/ was buggy — JS parses `[^]` as "any char"
+      // and `]*` as literal `]`, eating the first letter of every line.)
+      const text = line.replace(/^\s*\[[^\]]*\]\s*/, '').trim()
       if (!text) continue
 
       if (this.state === STATE.LISTENING_WAKE) {
