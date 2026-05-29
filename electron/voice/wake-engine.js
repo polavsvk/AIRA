@@ -221,12 +221,15 @@ class WakeEngine extends EventEmitter {
     this.lastWakeTime = Date.now()
     console.log('[WakeEngine] WAKE DETECTED:', text)
 
-    // Anything after "hey nova" is the start of the command
+    // Anything after "hey nova" is the start of the command.
+    // Strip leading punctuation whisper leaves: "Hey Noah, open..." → "open..."
     let remainder = text
     for (const p of WAKE_PATTERNS) {
       const m = text.match(p)
       if (m) {
-        remainder = text.slice(m.index + m[0].length).trim()
+        remainder = text.slice(m.index + m[0].length)
+          .replace(/^[\s,;:.!?]+/, '')  // drop leading punctuation from residual
+          .trim()
         break
       }
     }
