@@ -198,8 +198,9 @@ class WakeEngine extends EventEmitter {
   }
 
   _onTranscription(raw) {
-    // Whisper outputs lines as it transcribes
-    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean)
+    // Strip ANSI escape codes (whisper-stream uses [2K to animate its display)
+    const clean = raw.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+    const lines = clean.split('\n').map(l => l.trim()).filter(Boolean)
 
     for (const line of lines) {
       // Filter out whisper's own logging
