@@ -123,7 +123,6 @@ You are not an assistant. You are THE assistant to Mr. V. Sound like one."""
 # Pending confirmations store
 pending_confirmations: dict = {}
 
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
 def _build_system_message(agent_name: str = "NOVA", mark_task: str = None) -> str:
