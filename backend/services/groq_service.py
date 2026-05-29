@@ -7,9 +7,6 @@ import os
 import re
 import json
 import asyncio
-from groq import Groq
-from groq import BadRequestError as GroqBadRequestError
-from groq import RateLimitError as GroqRateLimitError
 from typing import List, AsyncGenerator
 from dotenv import load_dotenv
 from datetime import datetime
@@ -27,6 +24,22 @@ load_dotenv()
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+# ─── LLM Provider — Ollama (local) or Groq (cloud) ───────────────────────────
+# Set LLM_PROVIDER=ollama in .env to run 100% locally with no rate limits.
+# Set LLM_PROVIDER=groq (default) to use Groq cloud free tier.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
+
+if LLM_PROVIDER == "ollama":
+    from openai import OpenAI, RateLimitError as _RateLimitError, BadRequestError as _BadRequestError
+    _OLLAMA_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    _OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+    client    = OpenAI(base_url=_OLLAMA_URL, api_key="ollama")
+    LLM_MODEL = _OLLAMA_MODEL
+else:
+    from groq import Groq, RateLimitError as _RateLimitError, BadRequestError as _BadRequestError
+    client    = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+    LLM_MODEL = "llama-3.3-70b-versatile"
 
 # ─── Approved System Prompt ───────────────────────────────────────────────────
 
@@ -170,7 +183,7 @@ async def get_chat_response_stream_with_tools(
       {"type": "done",                "full_content": str, "agent": str}
     """
     if not client:
-        yield {"type": "token", "content": "GROQ_API_KEY not configured, Mr. V."}
+        yield {"type": "token", "content": "LLM not configured. Set GROQ_API_KEY or LLM_PROVIDER=ollama in .env, Mr. V."}
         yield {"type": "done", "full_content": "", "agent": agent_name}
         return
 
@@ -222,7 +235,7 @@ async def get_chat_response_stream_with_tools(
             break
         try:
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=LLM_MODEL,
                 messages=messages,
                 tools=tools_for_agent,
                 tool_choice="auto",
@@ -230,7 +243,7 @@ async def get_chat_response_stream_with_tools(
                 max_tokens=2048,
                 stream=False,
             )
-        except GroqRateLimitError as e:
+        except _RateLimitError as e:
             # Extract retry-after header if Groq provides it
             retry_after = 60
             try:
@@ -248,7 +261,7 @@ async def get_chat_response_stream_with_tools(
             yield {"type": "done", "full_content": msg, "agent": agent_name}
             return
 
-        except GroqBadRequestError as e:
+        except _BadRequestError as e:
             # ── tool_use_failed: LLaMA generated a malformed tool call ────────
             # Access e.body directly — much more reliable than parsing str(e)
             body        = getattr(e, "body", {}) or {}
@@ -308,7 +321,7 @@ async def get_chat_response_stream_with_tools(
             # tool_use_failed but couldn't parse → retry without tools
             try:
                 fallback = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model=LLM_MODEL,
                     messages=messages,
                     tool_choice="none",
                     temperature=0.7,
@@ -500,18 +513,18 @@ def get_opening_greeting() -> str:
 
 def get_chat_response(message: str, history: List[dict] = []) -> str:
     if not client:
-        return "GROQ_API_KEY not configured, Mr. V."
+        return "LLM not configured, Mr. V."
 
     messages = _build_messages(message, history)
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=LLM_MODEL,
             messages=messages,
             temperature=0.7,
             max_tokens=2048,
         )
         return completion.choices[0].message.content
-    except GroqRateLimitError:
+    except _RateLimitError:
         return "Rate limited right now, Mr. V. Give it a minute."
     except Exception as e:
         return f"Something went wrong: {str(e)[:100]}"
