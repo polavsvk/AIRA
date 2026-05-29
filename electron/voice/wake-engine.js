@@ -32,7 +32,13 @@ const WHISPER_BIN = (() => {
   }
   return candidates[0]  // default to new name (shows correct error if missing)
 })()
-const MODEL_PATH  = path.join(WHISPER_DIR, 'models', 'ggml-base.en.bin')
+// Prefer small.en (more accurate, ~488MB) when available; fall back to base.en.
+const MODEL_PATH = (() => {
+  const small = path.join(WHISPER_DIR, 'models', 'ggml-small.en.bin')
+  const base  = path.join(WHISPER_DIR, 'models', 'ggml-base.en.bin')
+  if (fs.existsSync(small)) return small
+  return base
+})()
 
 // ── Wake phrase detection ────────────────────────────────────────────────────
 // Require "hey nova" or similar — bare "nova" causes too many false positives.
