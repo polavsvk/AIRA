@@ -416,14 +416,14 @@ async def get_chat_response_stream_with_tools(
 
                     # Phase B — record observation for pattern learning
                     if result.get("success"):
-                        asyncio.create_task(
-                            asyncio.to_thread(
-                                record_observation,
+                        try:
+                            record_observation(
                                 tool_name, args,
                                 (args or {}).get("url", ""),
                                 (args or {}).get("target_label", ""),
                             )
-                        )
+                        except Exception:
+                            pass  # never block the response for a logging failure
 
                         # Check if suggested rules need to surface
                         from .pattern_service import get_suggested_rules
